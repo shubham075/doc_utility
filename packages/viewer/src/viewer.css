@@ -1,0 +1,237 @@
+.pv-root {
+  --pv-bg: #e8e8ea;
+  --pv-panel: #f6f6f7;
+  --pv-border: #cfcfd4;
+  --pv-text: #1c1c1f;
+  --pv-muted: #66666e;
+  --pv-accent: #2563eb;
+  --pv-hit: rgba(250, 204, 21, 0.55);
+  --pv-hit-active: rgba(249, 115, 22, 0.6);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--pv-text);
+  font: 13px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  .pv-root {
+    --pv-bg: #2b2b2f;
+    --pv-panel: #1f1f22;
+    --pv-border: #3a3a40;
+    --pv-text: #e8e8ea;
+    --pv-muted: #9a9aa3;
+    --pv-accent: #60a5fa;
+  }
+}
+.pv-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--pv-panel);
+  border-bottom: 1px solid var(--pv-border);
+  flex-wrap: wrap;
+}
+.pv-toolbar button,
+.pv-toolbar select,
+.pv-search button,
+.pv-page-input {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--pv-border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.pv-toolbar button:disabled,
+.pv-search button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.pv-toolbar button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--pv-accent) 18%, transparent);
+  border-color: var(--pv-accent);
+}
+.pv-page-input {
+  width: 3.2em;
+  text-align: center;
+  cursor: text;
+}
+.pv-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--pv-border);
+  margin: 0 4px;
+}
+.pv-muted {
+  color: var(--pv-muted);
+}
+.pv-zoom-label {
+  min-width: 3em;
+  text-align: right;
+}
+.pv-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.pv-sidebar {
+  width: 190px;
+  flex: none;
+  background: var(--pv-panel);
+  border-right: 1px solid var(--pv-border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.pv-scroll {
+  flex: 1;
+  overflow: auto;
+  scrollbar-gutter: stable; /* reserve the scrollbar so fit-width does not oscillate */
+  background: var(--pv-bg);
+  outline: none;
+  position: relative;
+}
+.pv-content {
+  position: relative;
+}
+.pv-page {
+  position: absolute;
+  background: #fff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+.pv-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.pv-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+.pv-text-layer {
+  position: absolute;
+  inset: 0;
+  line-height: 1;
+  color: transparent;
+}
+.pv-text {
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  line-height: 1;
+  color: transparent;
+}
+.pv-text::selection {
+  background: rgba(37, 99, 235, 0.35);
+  color: transparent;
+}
+.pv-hit {
+  position: absolute;
+  background: var(--pv-hit);
+  mix-blend-mode: multiply;
+  pointer-events: none;
+  border-radius: 2px;
+}
+.pv-hit-active {
+  background: var(--pv-hit-active);
+  outline: 2px solid #ea580c;
+}
+.pv-thumbs {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.pv-thumb {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  width: 136px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pv-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.pv-thumb canvas {
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.pv-thumb-selected {
+  border-color: var(--pv-accent);
+  color: var(--pv-text);
+}
+.pv-search {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  min-height: 0;
+  flex: 1;
+}
+.pv-search-input {
+  font: inherit;
+  padding: 5px 8px;
+  border: 1px solid var(--pv-border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+.pv-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pv-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+.pv-result {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--pv-border);
+  padding: 5px 2px;
+  cursor: pointer;
+}
+.pv-result-active {
+  background: color-mix(in srgb, var(--pv-accent) 18%, transparent);
+}
+.pv-result-page {
+  flex: none;
+  color: var(--pv-muted);
+  min-width: 2.4em;
+}
+.pv-result-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pv-result mark {
+  background: var(--pv-hit);
+  color: inherit;
+}

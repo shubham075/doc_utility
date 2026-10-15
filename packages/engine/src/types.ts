@@ -12,6 +12,24 @@ export interface RenderedBitmap {
   data: Uint8ClampedArray;
 }
 
+/** A run of text positioned in page space (points, origin top-left, y grows downward). */
+export interface TextItem {
+  str: string;
+  /** Baseline origin of the run. */
+  x: number;
+  y: number;
+  fontSize: number;
+  /** Advance width of the run in points. */
+  width: number;
+  /** Rotation in radians (clockwise on screen). */
+  angle: number;
+  /** Ascent as a fraction of fontSize (distance from baseline up to the top of the em box). */
+  ascent: number;
+  fontFamily: string;
+  /** True if a line break follows this run. */
+  hasEOL: boolean;
+}
+
 export interface PdfPage {
   readonly index: number;
   /** Page size in PDF points at rotation applied. */
@@ -19,6 +37,8 @@ export interface PdfPage {
   readonly height: number;
   render(options: RenderOptions): Promise<RenderedBitmap>;
   getText(): Promise<string>;
+  /** Positioned text runs (text layer + search). Not every engine implements it. */
+  getTextItems?(): Promise<TextItem[]>;
   close(): void;
 }
 

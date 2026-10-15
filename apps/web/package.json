@@ -12,6 +12,7 @@
   "dependencies": {
     "@hyzyla/pdfium": "^3.0.0",
     "@pdfsuite/engine": "workspace:*",
+    "@pdfsuite/viewer": "workspace:*",
     "pdfjs-dist": "^6.4.299",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"

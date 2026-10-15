@@ -53,6 +53,32 @@ describe.each(['pdfium', 'pdfjs'] as const)('%s engine', (id) => {
     doc.close();
   });
 
+  it('renders after text items were read and the page wrapper was closed', async () => {
+    const doc = await get().open(pdf);
+    const first = await doc.getPage(0);
+    await first.getTextItems?.();
+    first.close();
+    const again = await doc.getPage(0);
+    const bmp = await Promise.race([
+      again.render({ scale: 1 }),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('render hung')), 4000)),
+    ]);
+    expect(bmp.width).toBe(300);
+    doc.close();
+  });
+
+  it('reports positioned text items when supported', async () => {
+    const doc = await get().open(pdf);
+    const page = await doc.getPage(0);
+    if (!page.getTextItems) return;
+    const items = await page.getTextItems();
+    const hello = items.find((i) => i.str.includes('Hello'))!;
+    expect(hello.x).toBeCloseTo(20, 0);
+    expect(hello.y).toBeCloseTo(400 - 350, 0); // y grows downward from the top
+    expect(hello.fontSize).toBeCloseTo(18, 0);
+    doc.close();
+  });
+
   it('extracts text', async () => {
     const doc = await get().open(pdf);
     const text = await (await doc.getPage(2)).getText();

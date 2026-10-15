@@ -7,3 +7,4 @@ corpus/*.pdf
 !corpus/README.md
 tools/bench/results.json
 out/
+apps/web/public/sample200.pdf

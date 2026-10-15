@@ -1,4 +1,14 @@
-import type { OpenOptions, PdfDocument, PdfEngine, PdfPage, RenderOptions, RenderedBitmap } from './types.js';
+import type { OpenOptions, PdfDocument, PdfEngine, PdfPage, RenderOptions, RenderedBitmap, TextItem } from './types.js';
+
+type Matrix = [number, number, number, number, number, number];
+const mul = (a: Matrix, b: Matrix): Matrix => [
+  a[0] * b[0] + a[2] * b[1],
+  a[1] * b[0] + a[3] * b[1],
+  a[0] * b[2] + a[2] * b[3],
+  a[1] * b[2] + a[3] * b[3],
+  a[0] * b[4] + a[2] * b[5] + a[4],
+  a[1] * b[4] + a[3] * b[5] + a[5],
+];
 
 /** Minimal canvas surface needed by the adapter; satisfied by DOM canvas and @napi-rs/canvas. */
 export interface CanvasLike {
@@ -45,8 +55,32 @@ export async function createPdfjsEngine(opts: PdfjsEngineOptions): Promise<PdfEn
       const content = await this.page.getTextContent();
       return content.items.map((i: any) => i.str + (i.hasEOL ? '\n' : '')).join('');
     }
+    async getTextItems(): Promise<TextItem[]> {
+      const vp = this.page.getViewport({ scale: 1 });
+      const content = await this.page.getTextContent();
+      const out: TextItem[] = [];
+      for (const it of content.items as any[]) {
+        if (typeof it.str !== 'string') continue; // marked-content markers
+        if (it.str === '' && !it.hasEOL) continue;
+        const t = mul(vp.transform as Matrix, it.transform as Matrix);
+        const style = content.styles?.[it.fontName] ?? {};
+        out.push({
+          str: it.str,
+          x: t[4],
+          y: t[5],
+          fontSize: Math.hypot(t[2], t[3]),
+          width: it.width * vp.scale,
+          angle: Math.atan2(t[1], t[0]),
+          ascent: typeof style.ascent === 'number' && style.ascent > 0 ? style.ascent : 0.85,
+          fontFamily: style.fontFamily ?? 'sans-serif',
+          hasEOL: !!it.hasEOL,
+        });
+      }
+      return out;
+    }
     close(): void {
-      this.page.cleanup();
+      // Deliberately not page.cleanup(): it frees operator lists shared with other wrappers of the same
+      // cached PDFPageProxy and makes later render() calls hang. Memory is bounded by doc.cleanup()/destroy().
     }
   }
 
