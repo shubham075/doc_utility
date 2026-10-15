@@ -1,0 +1,30 @@
+{
+  "name": "@pdfsuite/forms",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "^0.32.0",
+    "pdf-lib": "^1.17.1",
+    "quickjs-emscripten": "^0.32.0"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "^1.0.11",
+    "@pdfsuite/annotations": "workspace:*",
+    "@pdfsuite/engine": "workspace:*",
+    "@types/node": "^26.6.5",
+    "pdfjs-dist": "^6.4.299",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  }
+}

@@ -422,3 +422,160 @@
   cursor: pointer;
   margin-left: 6px;
 }
+
+/* ---------------------------------------------------------------- forms + fill & sign */
+.pv-forms {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+.pv-tool-draw .pv-forms,
+.pv-tool-draw .pv-forms * {
+  pointer-events: none !important;
+}
+.pv-widget {
+  position: absolute;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 2px;
+  font-family: Helvetica, Arial, sans-serif;
+  color: #111;
+  pointer-events: auto;
+  background: transparent;
+  border-radius: 0;
+}
+.pv-forms-hl .pv-widget:not(.pv-w-readonly) {
+  background-color: rgba(120, 170, 255, 0.28);
+}
+.pv-widget:focus {
+  outline: 2px solid #2563eb;
+  outline-offset: 0;
+  background-color: rgba(255, 255, 255, 0.9);
+}
+.pv-w-required {
+  box-shadow: inset 0 0 0 1.5px rgba(220, 38, 38, 0.8);
+}
+.pv-w-readonly {
+  cursor: default;
+}
+.pv-w-checkbox,
+.pv-w-radio {
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pv-radio-dot {
+  width: 50%;
+  height: 50%;
+  border-radius: 50%;
+  background: #111;
+}
+.pv-w-signature {
+  cursor: pointer;
+  font-size: 10px;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+}
+textarea.pv-widget {
+  resize: none;
+  padding-top: 2px;
+  line-height: 1.15;
+}
+.pv-toast {
+  position: absolute;
+  top: 96px;
+  right: 16px;
+  z-index: 30;
+  max-width: 360px;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  background: #fff8e1;
+  color: #4a3b00;
+  border: 1px solid #f0c36d;
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+.pv-toast p {
+  margin: 0 0 4px;
+}
+.pv-toast button {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.pv-btn-group {
+  display: inline-flex;
+}
+.pv-btn-group button:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.pv-btn-group button:last-child {
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.pv-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pv-modal {
+  background: var(--pv-panel);
+  color: var(--pv-text);
+  border: 1px solid var(--pv-border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  width: min(560px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pv-modal h3 {
+  margin: 0;
+}
+.pv-modal button,
+.pv-modal input[type='text'] {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--pv-border);
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.pv-modal .pv-primary {
+  background: var(--pv-accent);
+  border-color: var(--pv-accent);
+  color: #fff;
+}
+.pv-modal button:disabled {
+  opacity: 0.4;
+}
+.pv-tabs {
+  display: flex;
+  gap: 4px;
+}
+.pv-tabs button[aria-selected='true'] {
+  background: color-mix(in srgb, var(--pv-accent) 25%, transparent);
+  border-color: var(--pv-accent);
+}
+.pv-sig-canvas {
+  width: 100%;
+  aspect-ratio: 520 / 170;
+  border: 1px dashed var(--pv-border);
+  border-radius: 6px;
+  background: #fff;
+  touch-action: none;
+  cursor: crosshair;
+}

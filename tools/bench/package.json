@@ -8,7 +8,8 @@
     "bench": "tsx src/bench.ts",
     "typecheck": "tsc --noEmit",
     "build": "echo skip",
-    "test": "echo no tests"
+    "test": "echo no tests",
+    "gen-form": "tsx src/gen-form.ts"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.11",

@@ -11,5 +11,5 @@ export default defineConfig({
   plugins: [react()],
   server: { headers: isolation },
   preview: { headers: isolation },
-  optimizeDeps: { exclude: ['@hyzyla/pdfium'] },
+  optimizeDeps: { exclude: ['@hyzyla/pdfium', 'quickjs-emscripten', '@jitl/quickjs-wasmfile-release-sync', 'quickjs-emscripten-core'] },
 });

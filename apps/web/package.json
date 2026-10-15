@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@hyzyla/pdfium": "^3.0.0",
+    "@jitl/quickjs-wasmfile-release-sync": "^0.32.0",
     "@pdfsuite/annotations": "workspace:*",
     "@pdfsuite/engine": "workspace:*",
+    "@pdfsuite/forms": "workspace:*",
     "@pdfsuite/viewer": "workspace:*",
     "pdfjs-dist": "^6.4.299",
     "react": "^19.3.0",

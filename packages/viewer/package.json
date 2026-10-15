@@ -16,6 +16,7 @@
   "dependencies": {
     "@pdfsuite/annotations": "workspace:*",
     "@pdfsuite/engine": "workspace:*",
+    "@pdfsuite/forms": "workspace:*",
     "react": "^19.3.0"
   },
   "devDependencies": {

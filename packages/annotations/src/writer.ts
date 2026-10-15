@@ -1,4 +1,4 @@
-import { PDFBool, PDFDict, PDFFont, PDFHexString, PDFName, PDFRef, PDFString, StandardFonts, type PDFContext } from 'pdf-lib';
+import { PDFBool, PDFDict, PDFDocument, PDFFont, PDFImage, PDFHexString, PDFName, PDFRef, PDFString, StandardFonts, type PDFContext } from 'pdf-lib';
 import { buildAppearance, FONT_RESOURCE_NAME, needsFont, type Appearance } from './appearance';
 import { toUser, type PageGeometry } from './geometry';
 import type { Annotation, ReviewStatus } from './model';
@@ -25,6 +25,7 @@ const SUBTYPE: Record<string, string> = {
   note: 'Text',
   freetext: 'FreeText',
   ink: 'Ink',
+  stamp: 'Stamp',
   square: 'Square',
   circle: 'Circle',
   line: 'Line',
@@ -61,7 +62,7 @@ export async function writeAnnotations(
   const model = new Map(annotations.map((a) => [a.id, a]));
 
   // ---- index what is already in the file
-  const entries = scanManaged(doc);
+  const entries = scanManaged(doc, true);
   const idByRef = new Map<string, string>();
   for (const e of entries) idByRef.set(refId(e.ref), getText(ctx, e.dict, 'NM') || refId(e.ref));
   const existing = new Map<string, AnnotEntry>();
@@ -116,9 +117,10 @@ export async function writeAnnotations(
     } else {
       const f = needsFont(a) ? await ensureFont() : undefined;
       const ap = buildAppearance(a, g, f);
+      const image = ap.image ? await embedDataUrl(doc, ap.image.dataUrl) : undefined;
       dict = baseDict(ctx, a, SUBTYPE[a.type]!, ap.rect);
       addTypeSpecific(ctx, dict, a, g);
-      const apRef = ctx.register(appearanceStream(ctx, ap, f));
+      const apRef = ctx.register(appearanceStream(ctx, ap, f, image));
       dict.set(PDFName.of('AP'), ctx.obj({ N: apRef }));
       rects.set(a.id, ap.rect);
     }
@@ -249,17 +251,28 @@ function addTypeSpecific(ctx: PDFContext, d: PDFDict, a: Annotation, g: PageGeom
   }
 }
 
-function appearanceStream(ctx: PDFContext, ap: Appearance, font?: PDFFont) {
+function appearanceStream(ctx: PDFContext, ap: Appearance, font?: PDFFont, image?: PDFImage) {
   const resources: Record<string, any> = {
     ExtGState: {
       GS: { Type: 'ExtGState', ca: ap.opacity, CA: ap.opacity, BM: ap.blendMultiply ? 'Multiply' : 'Normal' },
     },
   };
   if (font) resources.Font = { [FONT_RESOURCE_NAME]: font.ref };
+  if (image) resources.XObject = { Im: image.ref };
   return ctx.flateStream('/GS gs\n' + ap.content, {
     Type: 'XObject',
     Subtype: 'Form',
     BBox: ap.rect,
     Resources: resources,
   });
+}
+
+/** Decode a PNG/JPEG data URL and embed it. */
+async function embedDataUrl(doc: PDFDocument, dataUrl: string): Promise<PDFImage> {
+  const m = /^data:image\/(png|jpe?g);base64,(.*)$/i.exec(dataUrl);
+  if (!m) throw new Error('Unsupported image data (expected a PNG or JPEG data URL)');
+  const bin = atob(m[2]!);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return m[1]!.toLowerCase() === 'png' ? doc.embedPng(bytes) : doc.embedJpg(bytes);
 }

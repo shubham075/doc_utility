@@ -12,6 +12,8 @@ export interface Appearance {
   blendMultiply: boolean;
   /** Fill/stroke alpha for the ExtGState (the annotation also gets /CA). */
   opacity: number;
+  /** Stamp image; the content stream paints it as `/Im Do`. */
+  image?: { dataUrl: string };
 }
 
 export const needsFont = (a: Annotation) => a.type === 'freetext';
@@ -188,6 +190,15 @@ export function buildAppearance(a: Annotation, g: PageGeometry, font?: PDFFont):
       const arrows = heads.map((h) => poly(h, true) + '\nf').join('\n');
       const content = `${colorOp(a.color, true)}\n${colorOp(a.color)}\n${fmt(a.width)} w\n1 J 1 j\n${pt(a.p1.x, a.p1.y)} m ${pt(a.p2.x, a.p2.y)} l S\n${arrows}`;
       return { rect, content, blendMultiply: false, opacity: a.opacity };
+    }
+    case 'stamp': {
+      const R = a.rect;
+      // Affine map from the unit image square (v up) to the display rect, expressed in user space.
+      const o = U({ x: R.x, y: R.y + R.height });
+      const ux = U({ x: R.x + R.width, y: R.y + R.height });
+      const vy = U({ x: R.x, y: R.y });
+      const m = [ux.x - o.x, ux.y - o.y, vy.x - o.x, vy.y - o.y, o.x, o.y].map(fmt).join(' ');
+      return { rect: rectToUser(g, R), content: `q ${m} cm /Im Do Q`, blendMultiply: false, opacity: a.opacity, image: { dataUrl: a.dataUrl } };
     }
     case 'reply':
       throw new Error('replies have no appearance');

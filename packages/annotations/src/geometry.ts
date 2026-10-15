@@ -111,6 +111,7 @@ export function annotationBounds(a: Annotation): Rect {
     case 'freetext':
     case 'square':
     case 'circle':
+    case 'stamp':
       return a.rect;
     case 'ink': {
       const pts = a.strokes.flat();
@@ -142,6 +143,7 @@ export function translate(a: Annotation, dx: number, dy: number): Partial<Annota
     case 'freetext':
     case 'square':
     case 'circle':
+    case 'stamp':
       return { rect: mv(a.rect) };
     case 'ink':
       return { strokes: a.strokes.map((s) => s.map(mp)) };

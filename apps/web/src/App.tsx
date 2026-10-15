@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnnotationStore, readAnnotations, stripMarkupAnnotations, writeAnnotations } from '@pdfsuite/annotations';
 import type { PdfDocument } from '@pdfsuite/engine';
+import { FormStore, readForm, writeForm } from '@pdfsuite/forms';
 import { PdfViewer } from '@pdfsuite/viewer';
 import { desktop } from './desktop-bridge';
 import { getEngine, type EngineId } from './engines';
+import { getScriptRunner } from './scripts';
 
 interface Prepared {
   bytes: Uint8Array;
   /** Copy of the file without markup annotations: the viewer draws those itself from the store. */
   renderBytes: Uint8Array;
   store: AnnotationStore | null;
+  forms: FormStore | null;
   note?: string;
 }
 
@@ -77,19 +80,33 @@ export function App() {
     setOpened(null);
     (async () => {
       let store: AnnotationStore | null = null;
+      let forms: FormStore | null = null;
       let renderBytes = bytes;
       let note: string | undefined;
       try {
         const { annotations } = await readAnnotations(bytes);
         store = new AnnotationStore(annotations);
-        renderBytes = await stripMarkupAnnotations(bytes);
+        const model = await readForm(bytes);
+        if (model.hasForm && model.fields.length) {
+          const hasScripts = model.fields.some((f) => Object.values(f.actions).some(Boolean));
+          let runner = null;
+          if (hasScripts) {
+            try {
+              runner = await getScriptRunner();
+            } catch (e) {
+              note = `Form scripts disabled: ${e instanceof Error ? e.message : String(e)}`;
+            }
+          }
+          forms = new FormStore(model, runner);
+        }
+        renderBytes = await stripMarkupAnnotations(bytes, { formWidgets: !!forms });
       } catch (e) {
-        note = `Annotations unavailable: ${e instanceof Error ? e.message : String(e)}`;
+        note = `Annotations/forms unavailable: ${e instanceof Error ? e.message : String(e)}`;
       }
       if (cancelled) return;
       baseRef.current = bytes;
       setDirty(false);
-      setPrepared({ bytes, renderBytes, store, note });
+      setPrepared({ bytes, renderBytes, store, forms, note });
     })();
     return () => {
       cancelled = true;
@@ -129,6 +146,8 @@ export function App() {
 
   // ---- dirty tracking + unload guard
   const store = prepared?.store ?? null;
+  const formStore = prepared?.forms ?? null;
+  const [formDirty, setFormDirty] = useState(false);
   useEffect(() => {
     if (!store) return;
     const sync = () => setDirty(store.isDirty);
@@ -136,14 +155,21 @@ export function App() {
     return store.subscribe(sync);
   }, [store]);
   useEffect(() => {
-    if (!dirty) return;
+    setFormDirty(false);
+    if (!formStore) return;
+    const sync = () => setFormDirty(formStore.isDirty);
+    return formStore.subscribe(sync);
+  }, [formStore]);
+  const anyDirty = dirty || formDirty;
+  useEffect(() => {
+    if (!anyDirty) return;
     const warn = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = '';
     };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+  }, [anyDirty]);
 
   const onAuthorChange = useCallback((name: string) => {
     setAuthor(name);
@@ -154,22 +180,35 @@ export function App() {
     }
   }, []);
 
+  /** Apply pending form values and annotations to `base`; optionally flatten the form. */
+  const build = useCallback(
+    async (base: Uint8Array, flatten: boolean) => {
+      let out = base;
+      if (formStore && (formStore.isDirty || flatten)) {
+        const { values, display } = formStore.pendingWrite();
+        out = await writeForm(out, { values, display, flatten });
+      }
+      if (store) out = await writeAnnotations(out, store.getAll(), store.touchedIds);
+      return out;
+    },
+    [store, formStore],
+  );
+
+  const deliver = useCallback(async (out: Uint8Array, name: string) => {
+    const d = desktop();
+    return d ? (await d.saveFile(name, out)) !== null : saveInBrowser(out, name);
+  }, []);
+
   const save = useCallback(async () => {
-    if (!store || !baseRef.current || saving) return;
+    if (!baseRef.current || saving) return;
     setSaving(true);
     try {
-      const out = await writeAnnotations(baseRef.current, store.getAll(), store.touchedIds);
+      const out = await build(baseRef.current, false);
       const suggested = fileName.replace(/\.pdf$/i, '') + '.pdf';
-      let saved = false;
-      const d = desktop();
-      if (d) {
-        saved = (await d.saveFile(suggested, out)) !== null;
-      } else {
-        saved = await saveInBrowser(out, suggested);
-      }
-      if (saved) {
+      if (await deliver(out, suggested)) {
         baseRef.current = out;
-        store.markSaved();
+        store?.markSaved();
+        formStore?.markSaved();
         setStatus(`Saved ${suggested} (${(out.length / 1024).toFixed(0)} KB)`);
       }
     } catch (e) {
@@ -177,11 +216,42 @@ export function App() {
     } finally {
       setSaving(false);
     }
-  }, [store, fileName, saving]);
+  }, [build, deliver, fileName, saving, store, formStore]);
+
+  /** Save a flattened copy; the open document stays fillable. */
+  const flatten = useCallback(async () => {
+    if (!baseRef.current || saving) return;
+    setSaving(true);
+    try {
+      const out = await build(baseRef.current, true);
+      const name = fileName.replace(/\.pdf$/i, '') + '-flattened.pdf';
+      if (await deliver(out, name)) setStatus(`Saved flattened copy ${name}`);
+    } catch (e) {
+      setStatus(`Flatten failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  }, [build, deliver, fileName, saving]);
+
+  const exportData = useCallback(() => {
+    if (!formStore) return;
+    const json = JSON.stringify(formStore.exportData(), null, 2);
+    const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName.replace(/\.pdf$/i, '') + '-data.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }, [formStore, fileName]);
+
+  const formSupport = useMemo(
+    () => (formStore ? { store: formStore, onFlatten: flatten, onExport: exportData } : undefined),
+    [formStore, flatten, exportData],
+  );
 
   const annotations = useMemo(
-    () => (store ? { store, author, onAuthorChange, onSave: save, saving } : undefined),
-    [store, author, onAuthorChange, save, saving],
+    () => (store ? { store, author, onAuthorChange, onSave: save, saving, extraDirty: formDirty } : undefined),
+    [store, author, onAuthorChange, save, saving, formDirty],
   );
 
   return (
@@ -199,12 +269,12 @@ export function App() {
         </select>
         <span style={{ marginLeft: 'auto', color: '#555', fontSize: 12 }}>
           {fileName}
-          {dirty ? ' •' : ''}
+          {anyDirty ? ' •' : ''}
         </span>
       </header>
       <main style={{ flex: 1, minHeight: 0 }}>
         {opened ? (
-          <PdfViewer doc={opened.render} textDoc={opened.text} annotations={annotations} />
+          <PdfViewer doc={opened.render} textDoc={opened.text} annotations={annotations} forms={formSupport} />
         ) : (
           <p style={{ padding: 16, color: '#555' }}>{status}</p>
         )}

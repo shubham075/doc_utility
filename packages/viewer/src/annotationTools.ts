@@ -10,7 +10,14 @@ export type Tool =
   | 'rect'
   | 'ellipse'
   | 'line'
-  | 'arrow';
+  | 'arrow'
+  // Fill & Sign
+  | 'date'
+  | 'check'
+  | 'cross'
+  | 'dot'
+  | 'hline'
+  | 'stamp';
 
 export interface ToolStyle {
   color: string;
@@ -23,9 +30,9 @@ export interface ToolStyle {
 
 export const MARKUP_TOOLS: Tool[] = ['highlight', 'underline', 'strikeout', 'squiggly'];
 /** Tools that capture pointer drags/clicks on the page itself. */
-export const DRAW_TOOLS: Tool[] = ['note', 'textbox', 'ink', 'rect', 'ellipse', 'line', 'arrow'];
+export const DRAW_TOOLS: Tool[] = ['note', 'textbox', 'ink', 'rect', 'ellipse', 'line', 'arrow', 'date', 'check', 'cross', 'dot', 'hline', 'stamp'];
 /** Tools that stay active after one use. */
-export const STICKY_TOOLS: Tool[] = [...MARKUP_TOOLS, 'ink', 'rect', 'ellipse', 'line', 'arrow'];
+export const STICKY_TOOLS: Tool[] = [...MARKUP_TOOLS, 'ink', 'rect', 'ellipse', 'line', 'arrow', 'check', 'cross', 'dot', 'hline'];
 
 export const TOOL_LABELS: Record<Tool, string> = {
   select: 'Select',
@@ -40,6 +47,12 @@ export const TOOL_LABELS: Record<Tool, string> = {
   ellipse: 'Ellipse',
   line: 'Line',
   arrow: 'Arrow',
+  date: 'Date',
+  check: '✓',
+  cross: '✗',
+  dot: '●',
+  hline: '—',
+  stamp: 'Place',
 };
 
 export const TOOL_TITLES: Record<Tool, string> = {
@@ -55,6 +68,12 @@ export const TOOL_TITLES: Record<Tool, string> = {
   ellipse: 'Ellipse',
   line: 'Line',
   arrow: 'Arrow',
+  date: "Insert today's date — click on the page",
+  check: 'Check mark — click to place',
+  cross: 'Cross mark — click to place',
+  dot: 'Dot — click to place',
+  hline: 'Horizontal line — click to place',
+  stamp: 'Place the signature — click on the page',
 };
 
 export const PALETTE = ['#ffeb3b', '#ff9800', '#f44336', '#e91e63', '#4caf50', '#2196f3', '#9c27b0', '#111111'];
@@ -74,4 +93,19 @@ export const TOOL_DEFAULTS: Record<Tool, ToolStyle> = {
   ellipse: { ...base },
   line: { ...base },
   arrow: { ...base },
+  date: { ...base, color: '#111111', fontSize: 12 },
+  check: { ...base, color: '#111111' },
+  cross: { ...base, color: '#111111' },
+  dot: { ...base, color: '#111111' },
+  hline: { ...base, color: '#111111', width: 1.2 },
+  stamp: base,
 };
+
+/** An image waiting to be placed on a page (signature, initials). */
+export interface StampArm {
+  dataUrl: string;
+  /** width / height of the image. */
+  aspect: number;
+  /** Placement width in points. */
+  width: number;
+}

@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { PdfDocument } from '@pdfsuite/engine';
 import {
+  STAMP_ID_PREFIX,
   annotationBounds,
   baseFields,
+  newId,
   mergeLineRects,
   type Annotation,
   type AnnotationStore,
@@ -12,8 +14,13 @@ import {
 import { AnnotationLayer } from './AnnotationLayer';
 import { AnnotationToolbar } from './AnnotationToolbar';
 import { CommentsPanel } from './CommentsPanel';
-import { DRAW_TOOLS, MARKUP_TOOLS, STICKY_TOOLS, TOOL_DEFAULTS, type Tool, type ToolStyle } from './annotationTools';
+import { DRAW_TOOLS, MARKUP_TOOLS, STICKY_TOOLS, TOOL_DEFAULTS, type StampArm, type Tool, type ToolStyle } from './annotationTools';
 import { useAnnotations, useStoreFlags } from './useAnnotationStore';
+import type { FormStore } from '@pdfsuite/forms';
+import { FormLayer, type WidgetRef } from './FormLayer';
+import { FillSignToolbar, FormToolbar } from './FormToolbars';
+import { SignatureDialog } from './SignatureDialog';
+import { loadSignature, type SavedSignature, type SignatureKind } from './signatures';
 import {
   anchorAt,
   clampZoom,
@@ -45,6 +52,14 @@ export interface PdfViewerProps {
   textDoc: PdfDocument | null;
   /** Enables the annotation toolbar, overlay and comments panel. */
   annotations?: AnnotationSupport;
+  /** Enables live AcroForm filling. */
+  forms?: FormSupport;
+}
+
+export interface FormSupport {
+  store: FormStore;
+  onFlatten(): void;
+  onExport(): void;
 }
 
 export interface AnnotationSupport {
@@ -53,11 +68,13 @@ export interface AnnotationSupport {
   onAuthorChange(name: string): void;
   onSave(): void;
   saving: boolean;
+  /** Unsaved changes outside the annotation store (e.g. form values). */
+  extraDirty?: boolean;
 }
 
 type SidebarTab = 'pages' | 'search' | 'comments';
 
-export function PdfViewer({ doc, textDoc, annotations: ann }: PdfViewerProps) {
+export function PdfViewer({ doc, textDoc, annotations: ann, forms }: PdfViewerProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [sizes, setSizes] = useState<Size[]>([]);
@@ -93,6 +110,30 @@ export function PdfViewer({ doc, textDoc, annotations: ann }: PdfViewerProps) {
     }
     return m;
   }, [allAnnotations]);
+  // ---- forms + Fill & Sign
+  const formStore = forms?.store;
+  const [formHighlight, setFormHighlight] = useState(true);
+  const [formFocus, setFormFocus] = useState<WidgetRef | null>(null);
+  const [formAlerts, setFormAlerts] = useState<string[]>([]);
+  const [sigDialog, setSigDialog] = useState<{ kind: SignatureKind; target?: { page: number; rect: Rect } } | null>(null);
+  const [stampArm, setStampArm] = useState<StampArm | null>(null);
+  const [armedKind, setArmedKind] = useState<SignatureKind | null>(null);
+  const [savedSigs, setSavedSigs] = useState<Record<SignatureKind, SavedSignature | null>>(() => ({
+    signature: loadSignature('signature'),
+    initials: loadSignature('initials'),
+  }));
+  const fieldsByPage = useMemo(() => {
+    const m = new Map<number, import('@pdfsuite/forms').FormField[]>();
+    for (const f of formStore?.model.fields ?? []) {
+      for (const pg of new Set(f.widgets.map((w) => w.page))) {
+        const l = m.get(pg);
+        if (l) l.push(f);
+        else m.set(pg, [f]);
+      }
+    }
+    return m;
+  }, [formStore]);
+  useStoreFlagsForm(formStore);
   const commentCount = useMemo(() => allAnnotations.filter((a) => a.type !== 'reply').length, [allAnnotations]);
   // Drop the selection if the annotation disappears (delete / undo).
   useEffect(() => {
@@ -297,6 +338,90 @@ export function PdfViewer({ doc, textDoc, annotations: ann }: PdfViewerProps) {
     }, 0);
   }, []);
 
+  const armStamp = useCallback((kind: SignatureKind, sig: SavedSignature) => {
+    setStampArm({ dataUrl: sig.dataUrl, aspect: sig.aspect, width: kind === 'signature' ? 150 : 60 });
+    setArmedKind(kind);
+    setToolState('stamp');
+    setSelectedId(null);
+  }, []);
+  /** Fill & Sign button: place the saved image, or create one first. */
+  const onSign = useCallback(
+    (kind: SignatureKind) => {
+      const saved = savedSigs[kind];
+      if (saved) armStamp(kind, saved);
+      else setSigDialog({ kind });
+    },
+    [savedSigs, armStamp],
+  );
+  /** Click on an unsigned signature field: put the signature straight into it. */
+  const onSignField = useCallback(
+    (page: number, rect: Rect) => {
+      const saved = savedSigs.signature;
+      if (saved) placeInRect(saved, page, rect);
+      else setSigDialog({ kind: 'signature', target: { page, rect } });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [savedSigs, store, author],
+  );
+  function placeInRect(sig: SavedSignature, page: number, rect: Rect) {
+    if (!store) return;
+    const pad = 3;
+    const maxW = rect.width - 2 * pad;
+    const maxH = rect.height - 2 * pad;
+    const w = Math.min(maxW, maxH * sig.aspect);
+    const h = w / sig.aspect;
+    const a = {
+      ...baseFields(page, author, '#000000', 1),
+      id: STAMP_ID_PREFIX + newId(),
+      type: 'stamp' as const,
+      dataUrl: sig.dataUrl,
+      rect: { x: rect.x + (rect.width - w) / 2, y: rect.y + (rect.height - h) / 2, width: w, height: h },
+    };
+    store.add(a);
+    setSelectedId(a.id);
+  }
+  const onSigDone = useCallback(
+    (sig: SavedSignature | null) => {
+      const d = sigDialog;
+      setSigDialog(null);
+      if (!sig || !d) return;
+      setSavedSigs((s) => ({ ...s, [d.kind]: sig }));
+      if (d.target) placeInRect(sig, d.target.page, d.target.rect);
+      else armStamp(d.kind, sig);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sigDialog, armStamp, store, author],
+  );
+  const onFormTab = useCallback(
+    (from: WidgetRef, back: boolean) => {
+      const order = formStore?.model.tabOrder ?? [];
+      if (!order.length || !formStore) return;
+      const i = order.findIndex((t) => t.field === from.field && t.widget === from.widget);
+      // Skip widgets that cannot take focus (read-only, buttons, signature fields).
+      let next = from;
+      let f = formStore.model.fields.find((x) => x.name === from.field);
+      for (let step = 1; step <= order.length; step++) {
+        const cand = order[(((i < 0 ? 0 : i) + (back ? -step : step)) % order.length + order.length) % order.length]!;
+        const cf = formStore.model.fields.find((x) => x.name === cand.field);
+        if (cf && !cf.readOnly && cf.type !== 'pushbutton' && cf.type !== 'signature') {
+          next = cand;
+          f = cf;
+          break;
+        }
+      }
+      const w = f?.widgets[next.widget];
+      const el = scrollRef.current;
+      if (w && el) {
+        const top = layoutRef.current.tops[w.page];
+        if (top !== undefined) {
+          const y = top + w.rect.y * zoomRef.current;
+          if (y < el.scrollTop + 20 || y > el.scrollTop + el.clientHeight - 60) el.scrollTo({ top: Math.max(0, y - el.clientHeight / 3) });
+        }
+      }
+      setFormFocus(next);
+    },
+    [formStore],
+  );
   const onToolDone = useCallback(() => {
     setToolState((t) => (STICKY_TOOLS.includes(t) ? t : 'select'));
   }, []);
@@ -432,7 +557,23 @@ export function PdfViewer({ doc, textDoc, annotations: ann }: PdfViewerProps) {
         matches={search.byPage.get(i) ?? EMPTY}
         activeMatch={activeMatch?.page === i ? activeMatch : null}
         overlay={
-          store ? (
+          <>
+            {formStore && fieldsByPage.has(i) && (
+              <FormLayer
+                page={i}
+                size={sizes[i]!}
+                zoom={zoom}
+                store={formStore}
+                fields={fieldsByPage.get(i)!}
+                highlight={formHighlight}
+                focusTarget={formFocus}
+                onFocused={() => setFormFocus(null)}
+                onTab={onFormTab}
+                onAlerts={setFormAlerts}
+                onSign={onSignField}
+              />
+            )}
+          {store ? (
             <AnnotationLayer
               page={i}
               size={sizes[i]!}
@@ -440,6 +581,7 @@ export function PdfViewer({ doc, textDoc, annotations: ann }: PdfViewerProps) {
               annotations={byPage.get(i) ?? EMPTY_ANN}
               tool={tool}
               style={toolStyle}
+              stamp={stampArm}
               author={author}
               selectedId={selectedId}
               editingId={editingId}
@@ -449,7 +591,8 @@ export function PdfViewer({ doc, textDoc, annotations: ann }: PdfViewerProps) {
               onCreated={onCreated}
               onToolDone={onToolDone}
             />
-          ) : null
+          ) : null}
+          </>
         }
       />,
     );
@@ -479,7 +622,7 @@ export function PdfViewer({ doc, textDoc, annotations: ann }: PdfViewerProps) {
           selected={selected && selected.type !== 'reply' ? selected : undefined}
           canUndo={flags.canUndo}
           canRedo={flags.canRedo}
-          dirty={flags.dirty}
+          dirty={flags.dirty || !!ann.extraDirty}
           saving={ann.saving}
           onUndo={() => store.undo()}
           onRedo={() => store.redo()}
@@ -487,6 +630,27 @@ export function PdfViewer({ doc, textDoc, annotations: ann }: PdfViewerProps) {
           onSave={ann.onSave}
         />
       )}
+      {ann && store && (
+        <FillSignToolbar tool={tool} onTool={setTool} has={{ signature: !!savedSigs.signature, initials: !!savedSigs.initials }} armed={armedKind} onSign={onSign} onEdit={(kind) => setSigDialog({ kind })} />
+      )}
+      {forms && formStore && formStore.hasFields && (
+        <FormToolbar
+          fieldCount={formStore.model.fields.length}
+          highlight={formHighlight}
+          onHighlight={setFormHighlight}
+          onReset={() => setFormAlerts(formStore.reset().alerts)}
+          onExport={forms.onExport}
+          onFlatten={forms.onFlatten}
+          dirty={formStore.isDirty}
+        />
+      )}
+      {formAlerts.length > 0 && (
+        <div className="pv-toast" role="alert">
+          <div>{formAlerts.map((a, i) => <p key={i}>{a}</p>)}</div>
+          <button onClick={() => setFormAlerts([])} aria-label="Dismiss">✕</button>
+        </div>
+      )}
+      {sigDialog && <SignatureDialog kind={sigDialog.kind} onDone={onSigDone} />}
       <div className="pv-body">
         {sidebar && (
           <aside className={sidebar === 'search' || sidebar === 'comments' ? 'pv-sidebar pv-sidebar-wide' : 'pv-sidebar'}>
@@ -624,5 +788,13 @@ function Toolbar(props: {
         </button>
       )}
     </div>
+  );
+}
+
+function useStoreFlagsForm(store: FormStore | undefined) {
+  useSyncExternalStore(
+    store ? store.subscribe : (() => () => undefined),
+    store ? store.getVersion : () => 0,
+    store ? store.getVersion : () => 0,
   );
 }

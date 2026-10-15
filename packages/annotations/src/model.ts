@@ -20,7 +20,7 @@ export type ReviewStatus = 'none' | 'accepted' | 'rejected' | 'completed' | 'can
 export const REVIEW_STATUSES: ReviewStatus[] = ['none', 'accepted', 'rejected', 'completed', 'cancelled'];
 
 export type MarkupType = 'highlight' | 'underline' | 'strikeout' | 'squiggly';
-export type AnnotationType = MarkupType | 'note' | 'freetext' | 'ink' | 'square' | 'circle' | 'line' | 'reply';
+export type AnnotationType = MarkupType | 'note' | 'freetext' | 'ink' | 'square' | 'circle' | 'line' | 'stamp' | 'reply';
 
 export interface BaseAnnotation {
   /** Stable id; written to the PDF as /NM. Foreign annotations without /NM get `ref:<obj>-<gen>`. */
@@ -88,6 +88,15 @@ export interface LineAnnotation extends BaseAnnotation {
   endStyle: LineEnd;
 }
 
+/** Image stamp (signature, initials, logo). PNG or JPEG as a data URL. */
+export interface StampAnnotation extends BaseAnnotation {
+  type: 'stamp';
+  rect: Rect;
+  dataUrl: string;
+}
+/** NM prefix that marks stamps written by this app (they are managed on save but left as page content on reopen). */
+export const STAMP_ID_PREFIX = 'ps-stamp:';
+
 export interface ReplyAnnotation extends BaseAnnotation {
   type: 'reply';
   parentId: string;
@@ -100,6 +109,7 @@ export type Annotation =
   | InkAnnotation
   | ShapeAnnotation
   | LineAnnotation
+  | StampAnnotation
   | ReplyAnnotation;
 
 export const MARKUP_TYPES: MarkupType[] = ['highlight', 'underline', 'strikeout', 'squiggly'];
@@ -116,6 +126,7 @@ export const TYPE_LABELS: Record<AnnotationType, string> = {
   square: 'Rectangle',
   circle: 'Ellipse',
   line: 'Line',
+  stamp: 'Signature / image',
   reply: 'Reply',
 };
 

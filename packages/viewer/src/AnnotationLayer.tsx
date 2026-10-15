@@ -1,9 +1,11 @@
 import { memo, useEffect, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import {
   NOTE_SIZE,
+  STAMP_ID_PREFIX,
   annotationBounds,
   baseFields,
   isMovable,
+  newId,
   resizeRect,
   translate,
   type Annotation,
@@ -12,7 +14,7 @@ import {
   type Point,
   type Rect,
 } from '@pdfsuite/annotations';
-import { DRAW_TOOLS, type Tool, type ToolStyle } from './annotationTools';
+import { DRAW_TOOLS, type StampArm, type Tool, type ToolStyle } from './annotationTools';
 import type { Size } from './layout';
 
 const HANDLES: Handle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
@@ -24,6 +26,8 @@ interface Props {
   annotations: Annotation[];
   tool: Tool;
   style: ToolStyle;
+  /** Signature/initials image to place when the 'stamp' tool is active. */
+  stamp: StampArm | null;
   author: string;
   selectedId: string | null;
   editingId: string | null;
@@ -49,7 +53,7 @@ const normRect = (a: Point, b: Point): Rect => ({
 });
 
 export const AnnotationLayer = memo(function AnnotationLayer(p: Props) {
-  const { page, size, zoom, annotations, tool, style, author, selectedId, editingId, store } = p;
+  const { page, size, zoom, annotations, tool, style, stamp, author, selectedId, editingId, store } = p;
   const svgRef = useRef<SVGSVGElement>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const draftRef = useRef<Draft | null>(null);
@@ -79,6 +83,15 @@ export const AnnotationLayer = memo(function AnnotationLayer(p: Props) {
       store.add(a);
       p.onCreated(a);
       p.onToolDone();
+      return;
+    }
+    if (tool === 'date' || tool === 'check' || tool === 'cross' || tool === 'dot' || tool === 'hline' || tool === 'stamp') {
+      const a = createMark(tool, pt, page, author, style, stamp);
+      if (a) {
+        store.add(a);
+        p.onCreated(a);
+        p.onToolDone();
+      }
       return;
     }
     setDraftBoth({ tool, start: pt, cur: pt, points: [pt] });
@@ -399,6 +412,8 @@ function Shape({
           {a.startStyle === 'arrow' && <polygon points={arrowHead(a.p1, a.p2, a.width)} fill={a.color} fillOpacity={op} />}
         </g>
       );
+    case 'stamp':
+      return <image href={a.dataUrl} x={a.rect.x} y={a.rect.y} width={a.rect.width} height={a.rect.height} preserveAspectRatio="none" opacity={op} />;
     case 'reply':
       return null;
   }
@@ -447,7 +462,7 @@ function Selection({
   const b = annotationBounds(a);
   const pad = 2 / zoom;
   const hs = 8 / zoom;
-  const resizable = a.type === 'freetext' || a.type === 'square' || a.type === 'circle';
+  const resizable = a.type === 'freetext' || a.type === 'square' || a.type === 'circle' || a.type === 'stamp';
   const pos = (h: Handle): Point => ({
     x: h.includes('w') ? b.x : h.includes('e') ? b.x + b.width : b.x + b.width / 2,
     y: h.includes('n') ? b.y : h.includes('s') ? b.y + b.height : b.y + b.height / 2,
@@ -478,4 +493,42 @@ function Selection({
         ))}
     </g>
   );
+}
+
+/** One-click Fill & Sign marks, centred on the click. */
+function createMark(tool: Tool, pt: Point, page: number, author: string, style: ToolStyle, stamp: StampArm | null): Annotation | null {
+  const b = baseFields(page, author, style.color, 1);
+  const S = Math.max(8, style.fontSize) * 0.9;
+  switch (tool) {
+    case 'date': {
+      const text = new Date().toLocaleDateString();
+      const w = Math.max(60, text.length * style.fontSize * 0.62 + 8);
+      return { ...b, type: 'freetext', contents: text, rect: { x: pt.x, y: pt.y - style.fontSize * 0.8, width: w, height: style.fontSize * 1.6 }, fontSize: style.fontSize, fill: null, borderWidth: 0 };
+    }
+    case 'check':
+      return { ...b, type: 'ink', width: 1.8, strokes: [[{ x: pt.x - 0.45 * S, y: pt.y }, { x: pt.x - 0.1 * S, y: pt.y + 0.4 * S }, { x: pt.x + 0.5 * S, y: pt.y - 0.45 * S }]] };
+    case 'cross':
+      return {
+        ...b,
+        type: 'ink',
+        width: 1.8,
+        strokes: [
+          [{ x: pt.x - 0.4 * S, y: pt.y - 0.4 * S }, { x: pt.x + 0.4 * S, y: pt.y + 0.4 * S }],
+          [{ x: pt.x + 0.4 * S, y: pt.y - 0.4 * S }, { x: pt.x - 0.4 * S, y: pt.y + 0.4 * S }],
+        ],
+      };
+    case 'dot': {
+      const d = S * 0.5;
+      return { ...b, type: 'circle', rect: { x: pt.x - d / 2, y: pt.y - d / 2, width: d, height: d }, width: 1, fill: style.color };
+    }
+    case 'hline':
+      return { ...b, type: 'line', p1: { x: pt.x - 30, y: pt.y }, p2: { x: pt.x + 30, y: pt.y }, width: style.width, startStyle: 'none', endStyle: 'none' };
+    case 'stamp': {
+      if (!stamp) return null;
+      const h = stamp.width / stamp.aspect;
+      return { ...b, id: STAMP_ID_PREFIX + newId(), type: 'stamp', dataUrl: stamp.dataUrl, rect: { x: pt.x - stamp.width / 2, y: pt.y - h / 2, width: stamp.width, height: h } };
+    }
+    default:
+      return null;
+  }
 }
