@@ -20,6 +20,9 @@ import type { FormStore } from '@pdfsuite/forms';
 import { FormLayer, type WidgetRef } from './FormLayer';
 import { FillSignToolbar, FormToolbar } from './FormToolbars';
 import { SignatureDialog } from './SignatureDialog';
+import { PageOrganizer } from './PageOrganizer';
+import { CombineDialog, CropDialog, HeaderFooterDialog, SplitDialog, WatermarkDialog, type DialogKind, type PageTools } from './PageToolDialogs';
+import { OutlinePanel, PageToolbar } from './PageToolbar';
 import { loadSignature, type SavedSignature, type SignatureKind } from './signatures';
 import {
   anchorAt,
@@ -54,6 +57,8 @@ export interface PdfViewerProps {
   annotations?: AnnotationSupport;
   /** Enables live AcroForm filling. */
   forms?: FormSupport;
+  /** Enables organize/combine/split/crop/header-footer/watermark. */
+  pages?: PageTools;
 }
 
 export interface FormSupport {
@@ -72,9 +77,9 @@ export interface AnnotationSupport {
   extraDirty?: boolean;
 }
 
-type SidebarTab = 'pages' | 'search' | 'comments';
+type SidebarTab = 'pages' | 'search' | 'comments' | 'bookmarks';
 
-export function PdfViewer({ doc, textDoc, annotations: ann, forms }: PdfViewerProps) {
+export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTools }: PdfViewerProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [sizes, setSizes] = useState<Size[]>([]);
@@ -110,6 +115,11 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms }: PdfViewerPr
     }
     return m;
   }, [allAnnotations]);
+  // ---- page tools
+  const [organizing, setOrganizing] = useState(false);
+  const [dialog, setDialog] = useState<DialogKind | null>(null);
+  const bookmarkCount = pageTools?.outline.length ?? 0;
+
   // ---- forms + Fill & Sign
   const formStore = forms?.store;
   const [formHighlight, setFormHighlight] = useState(true);
@@ -612,7 +622,20 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms }: PdfViewerPr
         onZoomBy={zoomBy}
         onFind={openSearch}
         commentCount={ann ? commentCount : undefined}
+        hasBookmarks={bookmarkCount > 0}
       />
+      {pageTools && (
+        <PageToolbar
+          organizing={organizing}
+          onOrganize={() => setOrganizing((v) => !v)}
+          onDialog={setDialog}
+          canUndo={pageTools.canUndo}
+          canRedo={pageTools.canRedo}
+          onUndo={pageTools.onUndo}
+          onRedo={pageTools.onRedo}
+          busy={pageTools.busy}
+        />
+      )}
       {ann && store && (
         <AnnotationToolbar
           tool={tool}
@@ -651,11 +674,34 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms }: PdfViewerPr
         </div>
       )}
       {sigDialog && <SignatureDialog kind={sigDialog.kind} onDone={onSigDone} />}
-      <div className="pv-body">
+      {pageTools && dialog && (
+        <>
+          {dialog === 'combine' && <CombineDialog tools={pageTools} pageCount={doc.pageCount} currentPage={current} onClose={() => setDialog(null)} />}
+          {dialog === 'split' && <SplitDialog tools={pageTools} pageCount={doc.pageCount} currentPage={current} onClose={() => setDialog(null)} />}
+          {dialog === 'crop' && <CropDialog tools={pageTools} pageCount={doc.pageCount} currentPage={current} onClose={() => setDialog(null)} />}
+          {dialog === 'headerFooter' && <HeaderFooterDialog tools={pageTools} pageCount={doc.pageCount} currentPage={current} onClose={() => setDialog(null)} />}
+          {dialog === 'watermark' && <WatermarkDialog tools={pageTools} pageCount={doc.pageCount} currentPage={current} onClose={() => setDialog(null)} />}
+        </>
+      )}
+      {organizing && pageTools ? (
+        <PageOrganizer
+          doc={doc}
+          sizes={sizes}
+          queue={queue}
+          busy={pageTools.busy}
+          onApply={(items) => void pageTools.onApplyPlan(items).then(() => setOrganizing(false))}
+          onCancel={() => setOrganizing(false)}
+          onExtract={(items) => void pageTools.onExtract(items)}
+          onInsertFile={(plan, after, file) => void pageTools.onInsertFile(plan, after, file).then(() => setOrganizing(false))}
+        />
+      ) : null}
+      <div className="pv-body" hidden={organizing}>
         {sidebar && (
-          <aside className={sidebar === 'search' || sidebar === 'comments' ? 'pv-sidebar pv-sidebar-wide' : 'pv-sidebar'}>
+          <aside className={sidebar === 'search' || sidebar === 'comments' || sidebar === 'bookmarks' ? 'pv-sidebar pv-sidebar-wide' : 'pv-sidebar'}>
             {sidebar === 'pages' ? (
               <Thumbnails doc={doc} sizes={sizes} queue={queue} current={current} onSelect={goToPage} />
+            ) : sidebar === 'bookmarks' && pageTools ? (
+              <OutlinePanel items={pageTools.outline} onGoto={goToPage} />
             ) : sidebar === 'comments' && ann && store ? (
               <CommentsPanel
                 store={store}
@@ -701,6 +747,7 @@ function Toolbar(props: {
   onZoomBy(d: 1 | -1): void;
   onFind(): void;
   commentCount?: number;
+  hasBookmarks?: boolean;
 }) {
   const { page, pageCount, zoom, zoomMode } = props;
   const [text, setText] = useState(String(page + 1));
@@ -782,6 +829,11 @@ function Toolbar(props: {
       <button onClick={props.onFind} aria-pressed={props.sidebar === 'search'} title="Find (Ctrl+F)">
         🔍 Find
       </button>
+      {props.hasBookmarks && (
+        <button aria-pressed={props.sidebar === 'bookmarks'} onClick={() => props.onSidebar('bookmarks')} title="Bookmarks">
+          🔖 Bookmarks
+        </button>
+      )}
       {props.commentCount !== undefined && (
         <button aria-pressed={props.sidebar === 'comments'} onClick={() => props.onSidebar('comments')} title="Comments panel">
           💬 Comments{props.commentCount ? ` (${props.commentCount})` : ''}

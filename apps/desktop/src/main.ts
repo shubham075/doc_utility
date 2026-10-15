@@ -110,7 +110,7 @@ function registerIpc() {
   ipcMain.handle(IPC.saveDialog, async (_e, suggestedName: string, bytes: Uint8Array) => {
     const r = await dialog.showSaveDialog(mainWindow!, {
       defaultPath: basename(String(suggestedName)),
-      filters: [{ name: 'PDF documents', extensions: ['pdf'] }],
+      filters: extname(String(suggestedName)).toLowerCase() === '.zip' ? [{ name: 'ZIP archive', extensions: ['zip'] }] : [{ name: 'PDF documents', extensions: ['pdf'] }],
     });
     if (r.canceled || !r.filePath) return null;
     await writeFile(r.filePath, bytes); // TODO(phase 3+): atomic write (temp + rename)

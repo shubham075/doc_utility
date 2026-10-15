@@ -2,7 +2,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnnotationStore, readAnnotations, stripMarkupAnnotations, writeAnnotations } from '@pdfsuite/annotations';
 import type { PdfDocument } from '@pdfsuite/engine';
 import { FormStore, readForm, writeForm } from '@pdfsuite/forms';
-import { PdfViewer } from '@pdfsuite/viewer';
+import {
+  addHeaderFooter,
+  addWatermark,
+  assemble,
+  countPages,
+  cropPages,
+  detectMargins,
+  identityPlan,
+  isIdentity,
+  itemsFromSource,
+  makeZip,
+  parseRanges,
+  planSplit,
+  readOutline,
+  resetCrop,
+  splitPdf,
+  type OutlineItem,
+  type PlanItem,
+} from '@pdfsuite/pages';
+import { PdfViewer, type PageTools } from '@pdfsuite/viewer';
 import { desktop } from './desktop-bridge';
 import { getEngine, type EngineId } from './engines';
 import { getScriptRunner } from './scripts';
@@ -13,6 +32,7 @@ interface Prepared {
   renderBytes: Uint8Array;
   store: AnnotationStore | null;
   forms: FormStore | null;
+  outline: OutlineItem[];
   note?: string;
 }
 
@@ -42,8 +62,16 @@ export function App() {
   const [dirty, setDirty] = useState(false);
   /** Bytes the next save is based on (the original file, then each saved version). */
   const baseRef = useRef<Uint8Array | null>(null);
+  /** Page operations rewrite the file: keep snapshots so they can be undone, and track "needs saving". */
+  const [history, setHistory] = useState<{ undo: Uint8Array[]; redo: Uint8Array[] }>({ undo: [], redo: [] });
+  const [modified, setModified] = useState(false);
+  const [pageBusy, setPageBusy] = useState(false);
+  const pendingModified = useRef(false);
+  const openedRef = useRef<Opened | null>(null);
 
   const load = useCallback((data: Uint8Array, name: string) => {
+    setHistory({ undo: [], redo: [] });
+    pendingModified.current = false;
     setBytes(data);
     setFileName(name);
   }, []);
@@ -81,6 +109,7 @@ export function App() {
     (async () => {
       let store: AnnotationStore | null = null;
       let forms: FormStore | null = null;
+      let outline: OutlineItem[] = [];
       let renderBytes = bytes;
       let note: string | undefined;
       try {
@@ -100,13 +129,16 @@ export function App() {
           forms = new FormStore(model, runner);
         }
         renderBytes = await stripMarkupAnnotations(bytes, { formWidgets: !!forms });
+        outline = await readOutline(bytes).catch(() => []);
       } catch (e) {
         note = `Annotations/forms unavailable: ${e instanceof Error ? e.message : String(e)}`;
       }
       if (cancelled) return;
       baseRef.current = bytes;
       setDirty(false);
-      setPrepared({ bytes, renderBytes, store, forms, note });
+      setModified(pendingModified.current);
+      pendingModified.current = false;
+      setPrepared({ bytes, renderBytes, store, forms, outline, note });
     })();
     return () => {
       cancelled = true;
@@ -144,6 +176,10 @@ export function App() {
     };
   }, [prepared, engineId]);
 
+  useEffect(() => {
+    openedRef.current = opened;
+  }, [opened]);
+
   // ---- dirty tracking + unload guard
   const store = prepared?.store ?? null;
   const formStore = prepared?.forms ?? null;
@@ -160,7 +196,7 @@ export function App() {
     const sync = () => setFormDirty(formStore.isDirty);
     return formStore.subscribe(sync);
   }, [formStore]);
-  const anyDirty = dirty || formDirty;
+  const anyDirty = dirty || formDirty || modified;
   useEffect(() => {
     if (!anyDirty) return;
     const warn = (e: BeforeUnloadEvent) => {
@@ -209,6 +245,7 @@ export function App() {
         baseRef.current = out;
         store?.markSaved();
         formStore?.markSaved();
+        setModified(false);
         setStatus(`Saved ${suggested} (${(out.length / 1024).toFixed(0)} KB)`);
       }
     } catch (e) {
@@ -249,6 +286,119 @@ export function App() {
     [formStore, flatten, exportData],
   );
 
+  // ---------------------------------------------------------------- page tools
+  const baseName = fileName.replace(/\.pdf$/i, '');
+
+  /** Flush pending form/annotation edits into the bytes, run `fn`, and reload the result as the new document. */
+  const runEdit = useCallback(
+    async (fn: (bytes: Uint8Array) => Promise<Uint8Array>) => {
+      if (!baseRef.current) return;
+      setPageBusy(true);
+      try {
+        const flushed = await build(baseRef.current, false);
+        const out = await fn(flushed);
+        setHistory((h) => ({ undo: [...h.undo.slice(-9), flushed], redo: [] }));
+        pendingModified.current = true;
+        setBytes(out);
+      } catch (e) {
+        setStatus(`Page operation failed: ${e instanceof Error ? e.message : String(e)}`);
+        throw e;
+      } finally {
+        setPageBusy(false);
+      }
+    },
+    [build],
+  );
+
+  const stepHistory = useCallback(
+    async (dir: 'undo' | 'redo') => {
+      if (!baseRef.current) return;
+      const from = dir === 'undo' ? history.undo : history.redo;
+      const target = from[from.length - 1];
+      if (!target) return;
+      setPageBusy(true);
+      try {
+        const current = await build(baseRef.current, false);
+        setHistory(
+          dir === 'undo'
+            ? { undo: history.undo.slice(0, -1), redo: [...history.redo, current] }
+            : { undo: [...history.undo, current], redo: history.redo.slice(0, -1) },
+        );
+        pendingModified.current = true;
+        setBytes(target);
+      } finally {
+        setPageBusy(false);
+      }
+    },
+    [build, history],
+  );
+
+  const pageTools = useMemo<PageTools | undefined>(() => {
+    if (!prepared) return undefined;
+    return {
+      fileName: fileName || 'document.pdf',
+      busy: pageBusy || saving,
+      outline: prepared.outline,
+      canUndo: history.undo.length > 0,
+      canRedo: history.redo.length > 0,
+      onUndo: () => void stepHistory('undo'),
+      onRedo: () => void stepHistory('redo'),
+      onApplyPlan: (items) => runEdit((b) => assemble([b], items)),
+      onExtract: async (items) => {
+        if (!baseRef.current) return;
+        const flushed = await build(baseRef.current, false);
+        const out = await assemble([flushed], items);
+        if (await deliver(out, `${baseName}-extract.pdf`)) setStatus(`Extracted ${items.length} page(s)`);
+      },
+      onInsertFile: (plan, afterIndex, file) =>
+        runEdit(async (b) => {
+          const extra = new Uint8Array(await file.arrayBuffer());
+          const current = isIdentity(plan, await countPages(b)) ? b : await assemble([b], plan);
+          const n = plan.length;
+          const base = identityPlan(n);
+          const added = itemsFromSource(1, Array.from({ length: await countPages(extra) }, (_, i) => i));
+          return assemble([current, extra], [...base.slice(0, afterIndex + 1), ...added, ...base.slice(afterIndex + 1)]);
+        }),
+      onCombine: (entries) =>
+        runEdit(async (b) => {
+          const sources: Uint8Array[] = [];
+          const items: PlanItem[] = [];
+          for (const e of entries) {
+            const bytes = e.file ? new Uint8Array(await e.file.arrayBuffer()) : b;
+            const src = sources.length;
+            sources.push(bytes);
+            const count = await countPages(bytes);
+            items.push(...itemsFromSource(src, parseRanges(e.ranges, count)));
+          }
+          return assemble(sources, items);
+        }),
+      onSplit: async (spec) => {
+        if (!baseRef.current) return;
+        const flushed = await build(baseRef.current, false);
+        const groups = planSplit(await countPages(flushed), spec, prepared.outline);
+        const parts = await splitPdf(flushed, groups, baseName);
+        if (parts.length === 1) {
+          if (await deliver(parts[0]!.data, parts[0]!.name)) setStatus(`Saved ${parts[0]!.name}`);
+        } else if (await deliver(makeZip(parts), `${baseName}-split.zip`)) setStatus(`Saved ${parts.length} files as ${baseName}-split.zip`);
+      },
+      onCrop: (pages, margins) => runEdit((b) => cropPages(b, pages, margins)),
+      onResetCrop: (pages) => runEdit((b) => resetCrop(b, pages)),
+      onHeaderFooter: (spec) => runEdit((b) => addHeaderFooter(b, { ...spec, fileName })),
+      onWatermark: (spec) => runEdit((b) => addWatermark(b, spec)),
+      autoCropMargins: async (page) => {
+        const doc = openedRef.current?.render;
+        if (!doc) throw new Error('Document is not open');
+        const p = await doc.getPage(page);
+        try {
+          const bmp = await p.render({ scale: 1 });
+          return detectMargins(bmp.data, bmp.width, bmp.height, 1);
+        } finally {
+          p.close();
+        }
+      },
+    };
+  }, [prepared, fileName, pageBusy, saving, history, stepHistory, runEdit, build, deliver, baseName]);
+
   const annotations = useMemo(
     () => (store ? { store, author, onAuthorChange, onSave: save, saving, extraDirty: formDirty } : undefined),
     [store, author, onAuthorChange, save, saving, formDirty],
@@ -274,7 +424,7 @@ export function App() {
       </header>
       <main style={{ flex: 1, minHeight: 0 }}>
         {opened ? (
-          <PdfViewer doc={opened.render} textDoc={opened.text} annotations={annotations} forms={formSupport} />
+          <PdfViewer doc={opened.render} textDoc={opened.text} annotations={annotations} forms={formSupport} pages={pageTools} />
         ) : (
           <p style={{ padding: 16, color: '#555' }}>{status}</p>
         )}
@@ -286,13 +436,15 @@ export function App() {
 
 /** File System Access API when available, otherwise a download. Returns false if the user cancelled. */
 async function saveInBrowser(bytes: Uint8Array, name: string): Promise<boolean> {
+  const zip = /\.zip$/i.test(name);
+  const mime = zip ? 'application/zip' : 'application/pdf';
   const w = window as unknown as {
     showSaveFilePicker?: (o: unknown) => Promise<{ createWritable(): Promise<{ write(b: BlobPart): Promise<void>; close(): Promise<void> }> }>;
   };
-  const blob = new Blob([bytes as BlobPart], { type: 'application/pdf' });
+  const blob = new Blob([bytes as BlobPart], { type: mime });
   if (w.showSaveFilePicker) {
     try {
-      const handle = await w.showSaveFilePicker({ suggestedName: name, types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }] });
+      const handle = await w.showSaveFilePicker({ suggestedName: name, types: [{ description: zip ? 'ZIP archive' : 'PDF', accept: { [mime]: [zip ? '.zip' : '.pdf'] } }] });
       const stream = await handle.createWritable();
       await stream.write(blob);
       await stream.close();

@@ -17,32 +17,41 @@ class PdfiumPage implements PdfPage {
   constructor(
     readonly index: number,
     private readonly page: Page,
+    /** True once the owning document was destroyed: touching the page after that aborts the WASM module. */
+    private readonly docClosed: () => boolean,
   ) {
     const s = page.getOriginalSize();
     this.width = s.originalWidth;
     this.height = s.originalHeight;
   }
   async render({ scale }: RenderOptions): Promise<RenderedBitmap> {
+    if (this.docClosed()) throw new Error('Document was closed');
     const r = await this.page.render({ scale, render: 'bitmap', renderFormFields: true });
     return { width: r.width, height: r.height, data: new Uint8ClampedArray(r.data) };
   }
   async getText(): Promise<string> {
+    if (this.docClosed()) throw new Error('Document was closed');
     return this.page.getText();
   }
   close(): void {
-    this.page.close();
+    if (!this.docClosed()) this.page.close();
   }
 }
 
 class PdfiumDocument implements PdfDocument {
+  private closed = false;
   constructor(private readonly doc: Doc) {}
   get pageCount(): number {
+    if (this.closed) return 0;
     return this.doc.getPageCount();
   }
   async getPage(index: number): Promise<PdfPage> {
-    return new PdfiumPage(index, this.doc.getPage(index));
+    if (this.closed) throw new Error('Document was closed');
+    return new PdfiumPage(index, this.doc.getPage(index), () => this.closed);
   }
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     this.doc.destroy();
   }
 }

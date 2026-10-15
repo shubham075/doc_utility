@@ -79,6 +79,17 @@ describe.each(['pdfium', 'pdfjs'] as const)('%s engine', (id) => {
     doc.close();
   });
 
+  it('fails cleanly (no WASM abort) when a page is used after its document was closed', async () => {
+    if (id !== 'pdfium') return; // pdf.js has no native memory to corrupt; its behaviour differs
+    const doc = await get().open(pdf);
+    const page = await doc.getPage(0);
+    doc.close();
+    await expect(page.render({ scale: 1 })).rejects.toThrow();
+    expect(() => page.close()).not.toThrow();
+    await expect(doc.getPage(1)).rejects.toThrow();
+    doc.close(); // idempotent
+  });
+
   it('extracts text', async () => {
     const doc = await get().open(pdf);
     const text = await (await doc.getPage(2)).getText();
