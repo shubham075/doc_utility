@@ -1,0 +1,28 @@
+{
+  "name": "@pdfsuite/engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@hyzyla/pdfium": "^3.0.0",
+    "pdfjs-dist": "^6.4.299"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "^1.0.11",
+    "@types/node": "^26.6.5",
+    "pdf-lib": "^1.17.1"
+  }
+}

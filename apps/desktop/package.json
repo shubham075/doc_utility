@@ -1,0 +1,20 @@
+{
+  "name": "@pdfsuite/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && esbuild src/preload.ts --bundle --platform=node --external:electron --outfile=dist/preload.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "echo no tests",
+    "dev": "pnpm build && cross-env PDFSUITE_DEV_URL=http://localhost:5173 electron .",
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "cross-env": "^10.1.0",
+    "electron": "^44.7.2",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}

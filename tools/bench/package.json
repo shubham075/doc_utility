@@ -1,0 +1,24 @@
+{
+  "name": "@pdfsuite/bench",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "gen-sample": "tsx src/gen-sample.ts",
+    "bench": "tsx src/bench.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "echo skip",
+    "test": "echo no tests"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^1.0.11",
+    "@pdfsuite/engine": "workspace:*",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.4.299"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
