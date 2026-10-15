@@ -804,3 +804,16 @@ textarea.pv-widget {
 .pv-table-scroll { max-height: 320px; overflow: auto; }
 .pv-sigcard { border: 1px solid #ccc; border-radius: 4px; padding: 6px 8px; margin: 6px 0; display: flex; flex-direction: column; gap: 2px; }
 .pv-modal textarea.pv-search-input { font: inherit; resize: vertical; }
+
+/* ---- content editing */
+.pv-edit-capture { pointer-events: all; touch-action: none; }
+.pv-eo { fill: transparent; stroke: transparent; stroke-width: 1; pointer-events: all; cursor: move; vector-effect: non-scaling-stroke; }
+.pv-eo:hover { stroke: #1a73e8; stroke-dasharray: 3 2; }
+.pv-eo-text { cursor: text; }
+.pv-eo-sel, .pv-eo-sel:hover { stroke: #1a73e8; stroke-dasharray: none; stroke-width: 1.5; fill: rgba(26, 115, 232, 0.08); }
+.pv-eo-handle { fill: #fff; stroke: #1a73e8; pointer-events: all; }
+.pv-edit-link { fill: rgba(26, 115, 232, 0.06); stroke: #1a73e8; stroke-dasharray: 2 2; pointer-events: none; vector-effect: non-scaling-stroke; }
+.pv-edit-link-sel { stroke-dasharray: none; stroke-width: 1.5; fill: rgba(26, 115, 232, 0.18); }
+.pv-edit-input { width: 100%; box-sizing: border-box; font-family: Helvetica, Arial, sans-serif; border: 1px solid #1a73e8; background: rgba(255, 255, 255, 0.95); padding: 0 2px; margin: 0; outline: none; }
+.pv-editing .pv-forms, .pv-editing .pv-forms * { pointer-events: none !important; }
+.pv-editing .pv-text { pointer-events: none; user-select: none; }

@@ -44,7 +44,23 @@ import {
   type AuditAction,
   type Permissions,
 } from '@pdfsuite/security';
-import { Modal, PdfViewer, type ConvertTools, type PageTools, type SecurityTools } from '@pdfsuite/viewer';
+import {
+  addImage,
+  addLink,
+  addShape,
+  addText,
+  cropImage,
+  deleteLink,
+  deleteObjects,
+  editText,
+  exportImage,
+  listPageLinks,
+  listPageObjects,
+  moveResizeObjects,
+  replaceImage,
+  updateLink,
+} from '@pdfsuite/editor';
+import { Modal, PdfViewer, type ConvertTools, type EditTools, type PageTools, type SecurityTools } from '@pdfsuite/viewer';
 import { exportImages, exportText, imagesToPdf, optimizePdf, zipFiles, type SourceImage } from '@pdfsuite/convert';
 import { createTesseractRecognizer, ocrPdf } from '@pdfsuite/ocr';
 import { browserEncoder, browserJpegDecoder, browserRecompressor, toPdfImage } from './browserImage';
@@ -77,6 +93,21 @@ const loadAuthor = () => {
   } catch {
     return 'User';
   }
+};
+
+const fontFiles = new Map<string, Promise<Uint8Array>>();
+/** Bundled fallback font (Liberation Sans, copied to /fonts by the build) for characters an embedded font lacks. */
+const fallbackFont = ({ bold, italic }: { bold: boolean; italic: boolean }) => {
+  const file = `LiberationSans-${bold && italic ? 'BoldItalic' : bold ? 'Bold' : italic ? 'Italic' : 'Regular'}.ttf`;
+  let p = fontFiles.get(file);
+  if (!p) {
+    p = fetch(new URL(`/fonts/${file}`, location.href))
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('The fallback font could not be loaded.'))))
+      .then((b) => new Uint8Array(b));
+    p.catch(() => fontFiles.delete(file));
+    fontFiles.set(file, p);
+  }
+  return p;
 };
 
 const TRUST_KEY = 'pdfsuite.trust';
@@ -138,6 +169,7 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const pendingModified = useRef(false);
   const openedRef = useRef<Opened | null>(null);
+  const [epoch, setEpoch] = useState(0);
   const [protection, setProtection] = useState<Protection | null>(null);
   const [permissions, setPermissions] = useState<Permissions>(ALL_PERMISSIONS);
   const permissionsRef = useRef(permissions);
@@ -163,6 +195,7 @@ export function App() {
   const loadPlain = useCallback((data: Uint8Array, name: string) => {
     setHistory({ undo: [], redo: [] });
     pendingModified.current = false;
+    setEpoch((n) => n + 1);
     setBytes(data);
     setFileName(name);
   }, []);
@@ -223,12 +256,38 @@ export function App() {
       .catch((e) => setStatus(`Fetch failed: ${String(e)}`));
   }, [load]);
 
-  // ---- prepare: read annotations once per file, build the render copy
+  const engineIdRef = useRef(engineId);
+  engineIdRef.current = engineId;
+  const preparedRef = useRef<Prepared | null>(null);
+
+  /** Open the render copy (and the PDF.js copy for text) of a prepared document. */
+  const openDocs = useCallback(async (p: Prepared, id: EngineId): Promise<Opened> => {
+    const render = await (await getEngine(id)).open(p.renderBytes);
+    let text: PdfDocument | null = render;
+    if (id !== 'pdfjs') {
+      try {
+        text = await (await getEngine('pdfjs')).open(p.renderBytes);
+      } catch (e) {
+        render.close();
+        throw e;
+      }
+    }
+    return { render, text };
+  }, []);
+  /** Old documents are closed after the viewer has switched to the new ones. */
+  const closeOpened = useCallback((o: Opened | null) => {
+    if (!o) return;
+    setTimeout(() => {
+      o.render.close();
+      if (o.text && o.text !== o.render) o.text.close();
+    }, 600);
+  }, []);
+
+  // ---- prepare: read annotations once per file, build the render copy, open it, then switch the viewer over in one step
+  // (the previous document stays on screen meanwhile, so edits keep zoom, scroll position and tool state)
   useEffect(() => {
     if (!bytes) return;
     let cancelled = false;
-    setPrepared(null);
-    setOpened(null);
     (async () => {
       let store: AnnotationStore | null = null;
       let forms: FormStore | null = null;
@@ -258,47 +317,59 @@ export function App() {
         note = `Annotations/forms unavailable: ${e instanceof Error ? e.message : String(e)}`;
       }
       if (cancelled) return;
+      const next: Prepared = { bytes, renderBytes, store, forms, outline, signed: hasSignature(bytes), note };
+      let o: Opened | null = null;
+      let failure: string | null = null;
+      const t = performance.now();
+      try {
+        o = await openDocs(next, engineIdRef.current);
+      } catch (e) {
+        failure = `Failed to open: ${String(e)}`;
+      }
+      if (cancelled) {
+        closeOpened(o);
+        return;
+      }
+      const old = openedRef.current;
       baseRef.current = bytes;
+      preparedRef.current = next;
       setDirty(false);
       setModified(pendingModified.current);
       pendingModified.current = false;
-      setPrepared({ bytes, renderBytes, store, forms, outline, signed: hasSignature(bytes), note });
+      setPrepared(next);
+      setOpened(o);
+      closeOpened(old);
+      setStatus(o ? `${o.render.pageCount} pages · opened in ${(performance.now() - t).toFixed(0)} ms` + (note ? ` · ${note}` : '') : failure!);
     })();
     return () => {
       cancelled = true;
     };
-  }, [bytes]);
+  }, [bytes, openDocs, closeOpened]);
 
-  // ---- open the documents. Text (for text layer + search) always comes from PDF.js.
+  // ---- switching the render engine re-opens the current document
+  const firstEngine = useRef(true);
   useEffect(() => {
-    if (!prepared) return;
+    if (firstEngine.current) {
+      firstEngine.current = false;
+      return;
+    }
+    const p = preparedRef.current;
+    if (!p) return;
     let cancelled = false;
-    const docs: PdfDocument[] = [];
-    (async () => {
-      try {
-        const t = performance.now();
-        const render = await (await getEngine(engineId)).open(prepared.renderBytes);
-        docs.push(render);
-        let text: PdfDocument | null = render;
-        if (engineId !== 'pdfjs') {
-          text = await (await getEngine('pdfjs')).open(prepared.renderBytes);
-          docs.push(text);
-        }
-        if (cancelled) return docs.forEach((d) => d.close());
-        setOpened({ render, text });
-        setStatus(
-          `${render.pageCount} pages · opened in ${(performance.now() - t).toFixed(0)} ms` + (prepared.note ? ` · ${prepared.note}` : ''),
-        );
-      } catch (e) {
-        setStatus(`Failed to open: ${String(e)}`);
-      }
-    })();
+    openDocs(p, engineId).then(
+      (o) => {
+        if (cancelled) return closeOpened(o);
+        const old = openedRef.current;
+        setOpened(o);
+        closeOpened(old);
+      },
+      (e) => setStatus(`Failed to open: ${String(e)}`),
+    );
     return () => {
       cancelled = true;
-      setOpened(null);
-      setTimeout(() => docs.forEach((d) => d.close()), 0); // after the viewer has unmounted
     };
-  }, [prepared, engineId]);
+  }, [engineId, openDocs, closeOpened]);
+  useEffect(() => () => closeOpened(openedRef.current), [closeOpened]);
 
   useEffect(() => {
     openedRef.current = opened;
@@ -789,6 +860,49 @@ export function App() {
     };
   }, [prepared, pageBusy, saving, permissions, protection, trusted, fileName, audit, auditLog, deliver, flushed, runEdit]);
 
+  // ---------------------------------------------------------------- content editing
+  const editTools = useMemo<EditTools | undefined>(() => {
+    if (!prepared || !permissions.modify) return undefined;
+    const bytes = prepared.bytes;
+    const name = baseName || 'document';
+    return {
+      busy: pageBusy || saving,
+      listObjects: (page) => listPageObjects(bytes, page),
+      listLinks: (page) => listPageLinks(bytes, page),
+      onMove: (page, changes) => runEdit((b) => moveResizeObjects(b, page, changes)),
+      onDelete: (page, ids) => runEdit((b) => deleteObjects(b, page, ids)),
+      onEditText: async (page, id, text) => {
+        let warnings: string[] = [];
+        await runEdit(async (b) => {
+          const r = await editText(b, page, id, text, { fallbackFont });
+          warnings = r.warnings;
+          return r.bytes;
+        });
+        return warnings;
+      },
+      onAddText: async (page, spec) => {
+        let warnings: string[] = [];
+        await runEdit(async (b) => {
+          const r = await addText(b, page, spec, { fallbackFont });
+          warnings = r.warnings;
+          return r.bytes;
+        });
+        return warnings;
+      },
+      onAddImage: (page, rect, file) => runEdit(async (b) => (await addImage(b, page, rect, await toPdfImage(file))).bytes),
+      onAddShape: (page, spec) => runEdit(async (b) => (await addShape(b, page, spec)).bytes),
+      onReplaceImage: (page, id, file) => runEdit(async (b) => replaceImage(b, page, id, await toPdfImage(file), 'contain')),
+      onCropImage: (page, id, area) => runEdit((b) => cropImage(b, page, id, area)),
+      onExportImage: async (page, id) => {
+        const r = await exportImage(await flushed(), page, id);
+        if (await deliver(r.data, `${name}-page${page + 1}-image.${r.extension}`)) setStatus('Image exported');
+      },
+      onAddLink: (page, rect, target) => runEdit((b) => addLink(b, page, rect, target)),
+      onUpdateLink: (page, index, target) => runEdit((b) => updateLink(b, page, index, { target })),
+      onDeleteLink: (page, index) => runEdit((b) => deleteLink(b, page, index)),
+    };
+  }, [prepared, permissions.modify, pageBusy, saving, baseName, runEdit, flushed, deliver]);
+
   const annotations = useMemo(
     () => (store ? { store, author, onAuthorChange, onSave: save, saving, extraDirty: formDirty } : undefined),
     [store, author, onAuthorChange, save, saving, formDirty],
@@ -823,6 +937,8 @@ export function App() {
             pages={permissions.assemble || permissions.modify ? pageTools : undefined}
             convert={permissions.copy ? convertTools : undefined}
             security={securityTools}
+            edit={editTools}
+            resetKey={epoch}
           />
         ) : (
           <p style={{ padding: 16, color: '#555' }}>{status}</p>

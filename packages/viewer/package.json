@@ -16,11 +16,12 @@
   "dependencies": {
     "@pdfsuite/annotations": "workspace:*",
     "@pdfsuite/convert": "workspace:*",
+    "@pdfsuite/editor": "workspace:*",
     "@pdfsuite/engine": "workspace:*",
     "@pdfsuite/forms": "workspace:*",
     "@pdfsuite/pages": "workspace:*",
-    "react": "^19.3.0",
-    "@pdfsuite/security": "workspace:*"
+    "@pdfsuite/security": "workspace:*",
+    "react": "^19.3.0"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

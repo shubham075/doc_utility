@@ -24,6 +24,9 @@ import { PageOrganizer } from './PageOrganizer';
 import { CombineDialog, CropDialog, HeaderFooterDialog, SplitDialog, WatermarkDialog, type DialogKind, type PageTools } from './PageToolDialogs';
 import { OutlinePanel, PageToolbar } from './PageToolbar';
 import { SecurityToolbar } from './SecurityToolbar';
+import { EditLayer } from './EditLayer';
+import { EditToolbar, initialEditState, type EditState } from './EditToolbar';
+import type { EditTools } from './EditTypes';
 import { AuditDialog, ProtectDialog, RedactDialog, SanitizeDialog, SignDialog, SignaturesDialog, type SecurityDialogKind, type SecurityTools } from './SecurityDialogs';
 import { CompressDialog, CreateDialog, ExportDialog, OcrDialog, type ConvertDialogKind, type ConvertTools } from './ConvertDialogs';
 import { loadSignature, type SavedSignature, type SignatureKind } from './signatures';
@@ -48,6 +51,7 @@ import { Thumbnails } from './Thumbnails';
 import { useSearch } from './useSearch';
 import './viewer.css';
 
+const EMPTY_IDS: string[] = [];
 const GAP = 12;
 const PADDING = 16;
 
@@ -66,6 +70,10 @@ export interface PdfViewerProps {
   convert?: ConvertTools;
   /** Enables protect/sanitize/redact/sign/audit, and enforces the document's permissions. */
   security?: SecurityTools;
+  /** Enables content editing: text, images, shapes, links. */
+  edit?: EditTools;
+  /** Changes when a different file is opened. A new `doc` with the same key and page count keeps scroll position and zoom (edits reload the document). */
+  resetKey?: unknown;
 }
 
 export interface FormSupport {
@@ -86,7 +94,7 @@ export interface AnnotationSupport {
 
 type SidebarTab = 'pages' | 'search' | 'comments' | 'bookmarks';
 
-export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTools, convert, security }: PdfViewerProps) {
+export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTools, convert, security, edit, resetKey }: PdfViewerProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [sizes, setSizes] = useState<Size[]>([]);
@@ -128,6 +136,14 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
   const bookmarkCount = pageTools?.outline.length ?? 0;
   const [convertDialog, setConvertDialog] = useState<ConvertDialogKind | null>(null);
   const [secDialog, setSecDialog] = useState<SecurityDialogKind | null>(null);
+  const [editState, setEditState] = useState<EditState>(initialEditState);
+  const editSet = useCallback((patch: Partial<EditState>) => setEditState((s) => ({ ...s, ...patch })), []);
+  const [editNotice, setEditNotice] = useState<string | null>(null);
+  const editing = !!edit && editState.on;
+  // leaving edit mode (or losing edit support, e.g. a permission change) drops the selection
+  useEffect(() => {
+    if (!editing && editState.on) setEditState(initialEditState);
+  }, [editing, editState.on]);
   const canAnnotate = !security || security.permissions.annotate || security.permissions.modify;
   const redactMarks = useMemo(() => allAnnotations.filter((a) => a.type === 'redact'), [allAnnotations]);
 
@@ -213,13 +229,18 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
     }
   }, [store]);
 
+  const keptRef = useRef<{ key: unknown; pages: number }>({ key: undefined, pages: 0 });
   // ---- page sizes: first page immediately, the rest in the background
   useEffect(() => {
     let cancelled = false;
-    setSizes([]);
-    setScrollTop(0);
-    scrollRef.current?.scrollTo({ top: 0 });
-    anchorRef.current = null;
+    const keep = keptRef.current.key === resetKey && keptRef.current.pages === doc.pageCount && doc.pageCount > 0;
+    keptRef.current = { key: resetKey, pages: doc.pageCount };
+    if (!keep) {
+      setSizes([]);
+      setScrollTop(0);
+      scrollRef.current?.scrollTo({ top: 0 });
+      anchorRef.current = null;
+    }
     (async () => {
       const n = doc.pageCount;
       if (!n) return;
@@ -231,7 +252,7 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
       };
       const arr: Size[] = new Array(n).fill(await sizeOf(0));
       if (cancelled) return;
-      setSizes(arr.slice());
+      if (!keep) setSizes(arr.slice());
       for (let start = 1; start < n; start += 100) {
         await new Promise((r) => setTimeout(r, 0));
         if (cancelled) return;
@@ -241,13 +262,16 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
           if (s.width !== arr[i]!.width || s.height !== arr[i]!.height) changed = true;
           arr[i] = s;
         }
-        if (changed) setSizes(arr.slice());
+        if (changed && !keep) setSizes(arr.slice());
+      }
+      if (keep && !cancelled) {
+        setSizes((prev) => (prev.length === arr.length && prev.every((s, i) => s.width === arr[i]!.width && s.height === arr[i]!.height) ? prev : arr.slice()));
       }
     })().catch((e) => console.warn('page size scan failed', e));
     return () => {
       cancelled = true;
     };
-  }, [doc]);
+  }, [doc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- viewport size
   useEffect(() => {
@@ -291,11 +315,11 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
     if (!el) return;
     let raf = 0;
     const onScroll = () => {
+      anchorRef.current = anchorAt(layoutRef.current, el.scrollTop); // cheap and never stale, even if frames are throttled
       if (raf) return;
       raf = requestAnimationFrame(() => {
         raf = 0;
         setScrollTop(el.scrollTop);
-        anchorRef.current = anchorAt(layoutRef.current, el.scrollTop);
       });
     };
     el.addEventListener('scroll', onScroll, { passive: true });
@@ -526,6 +550,11 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
       } else if (mod && e.key.toLowerCase() === 's' && ann) {
         e.preventDefault();
         ann.onSave();
+      } else if (editing && edit && (e.key === 'Delete' || e.key === 'Backspace') && !isTextField(e.target) && (editState.sel.ids.length || editState.linkSel)) {
+        e.preventDefault();
+        const st = editState;
+        if (st.linkSel) void edit.onDeleteLink(st.linkSel.page, st.linkSel.index).then(() => editSet({ linkSel: null }), (er) => setEditNotice(String(er instanceof Error ? er.message : er)));
+        else void edit.onDelete(st.sel.page, st.sel.ids).then(() => editSet({ sel: { page: st.sel.page, ids: [] } }), (er) => setEditNotice(String(er instanceof Error ? er.message : er)));
       } else if (store && (e.key === 'Delete' || e.key === 'Backspace') && selectedId && !isTextField(e.target)) {
         e.preventDefault();
         store.remove(selectedId);
@@ -558,7 +587,7 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [goToPage, openSearch, search, sidebar, zoomBy, store, ann, selectedId, tool]);
+  }, [goToPage, openSearch, search, sidebar, zoomBy, store, ann, selectedId, tool, editing, edit, editState, editSet]);
 
   // ---- render
   const range = visibleRange(layout, scrollTop, viewport.height, viewport.height);
@@ -595,6 +624,32 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
                 onSign={onSignField}
               />
             )}
+          {editing && edit ? (
+            <EditLayer
+              page={i}
+              size={sizes[i]!}
+              zoom={zoom}
+              doc={doc}
+              tools={edit}
+              mode={editState.mode}
+              selection={editState.sel.page === i ? editState.sel.ids : EMPTY_IDS}
+              linkSel={editState.linkSel?.page === i ? editState.linkSel.index : null}
+              textStyle={editState.textStyle}
+              shapeStyle={editState.shapeStyle}
+              place={editState.place}
+              cropId={editState.cropId}
+              onSelect={(ids) => editSet({ sel: { page: i, ids }, linkSel: null })}
+              onLinkSelect={(index) => editSet({ linkSel: index === null ? null : { page: i, index }, sel: index === null ? editState.sel : { page: i, ids: [] } })}
+              onLinkRect={(rect) => editSet({ linkDialog: { page: i, rect } })}
+              onCrop={(rect) => {
+                const id = editState.cropId;
+                editSet({ mode: 'select', cropId: null });
+                if (id) void edit.onCropImage(i, id, rect).catch((er) => setEditNotice(String(er instanceof Error ? er.message : er)));
+              }}
+              onNotice={setEditNotice}
+              onModeDone={() => editSet({ mode: 'select', place: null })}
+            />
+          ) : null}
           {store ? (
             <AnnotationLayer
               page={i}
@@ -621,7 +676,7 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
   }
 
   return (
-    <div className={`pv-root pv-tool-${tool}${DRAW_TOOLS.includes(tool) ? ' pv-tool-draw' : ''}${security && !security.permissions.copy ? ' pv-nocopy' : ''}`}>
+    <div className={`pv-root pv-tool-${tool}${DRAW_TOOLS.includes(tool) ? ' pv-tool-draw' : ''}${security && !security.permissions.copy ? ' pv-nocopy' : ''}${editing ? ' pv-editing' : ''}`}>
       <Toolbar
         sidebar={sidebar}
         onSidebar={(t) => setSidebar((s) => (s === t ? null : t))}
@@ -672,7 +727,8 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
       {security && (
         <SecurityToolbar tools={security} tool={tool} onTool={setTool} markCount={redactMarks.length} onDialog={setSecDialog} canMark={!!store && canAnnotate} />
       )}
-      {ann && store && canAnnotate && (
+      {edit && <EditToolbar tools={edit} doc={doc} state={editState} set={editSet} onNotice={setEditNotice} />}
+      {ann && store && canAnnotate && !editing && (
         <AnnotationToolbar
           tool={tool}
           onTool={setTool}
@@ -689,7 +745,7 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
           onSave={ann.onSave}
         />
       )}
-      {ann && store && canAnnotate && (
+      {ann && store && canAnnotate && !editing && (
         <FillSignToolbar tool={tool} onTool={setTool} has={{ signature: !!savedSigs.signature, initials: !!savedSigs.initials }} armed={armedKind} onSign={onSign} onEdit={(kind) => setSigDialog({ kind })} />
       )}
       {forms && formStore && formStore.hasFields && (
@@ -707,6 +763,12 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
         <div className="pv-toast" role="alert">
           <div>{formAlerts.map((a, i) => <p key={i}>{a}</p>)}</div>
           <button onClick={() => setFormAlerts([])} aria-label="Dismiss">✕</button>
+        </div>
+      )}
+      {editNotice && (
+        <div className="pv-toast" role="alert">
+          <div>{editNotice}</div>
+          <button onClick={() => setEditNotice(null)} aria-label="Dismiss">✕</button>
         </div>
       )}
       {sigDialog && <SignatureDialog kind={sigDialog.kind} onDone={onSigDone} />}

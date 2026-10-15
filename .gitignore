@@ -10,3 +10,4 @@ out/
 apps/web/public/sample200.pdf
 .cache-test/
 apps/web/public/ocr/
+apps/web/public/fonts/

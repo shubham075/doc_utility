@@ -4,6 +4,7 @@ Internal Acrobat-class PDF viewer/editor. See `PDF_SUITE_IMPLEMENTATION_PLAN.md`
 
 ## Layout
 - `apps/desktop` — Electron shell (sandboxed renderer, `app://` protocol with CSP + COOP/COEP, native open/save, file association)
+- `packages/editor` — content editing: page object scanner, move/resize/delete, text-run editing with fallback font, add text/image/shapes, image export/replace/crop, links
 - `packages/security` — password/permission encryption (AES-256, decrypts RC4/AES-128/AES-256), sanitize, true redaction, certificate signatures + verification, hash-chained audit log
 - `packages/convert` — images→PDF, export images/text, compress/optimize
 - `packages/ocr` — tesseract.js OCR + invisible text layer

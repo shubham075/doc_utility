@@ -17,3 +17,10 @@ for (const f of readdirSync(core)) if (/^tesseract-core(-[a-z]+)?-lstm\.(wasm|wa
 const data = join(dirname(require.resolve('@tesseract.js-data/eng/package.json')), '4.0.0_best_int', 'eng.traineddata.gz');
 cpSync(data, join(out, 'lang', 'eng.traineddata.gz'));
 console.log('OCR assets copied to', out);
+
+// Fallback fonts for text editing (Liberation Sans, SIL OFL 1.1; licence file is copied next to them).
+const pdfjs = dirname(require.resolve('pdfjs-dist/package.json'));
+const fonts = new URL('../public/fonts/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+mkdirSync(fonts, { recursive: true });
+for (const f of ['LiberationSans-Regular.ttf', 'LiberationSans-Bold.ttf', 'LiberationSans-Italic.ttf', 'LiberationSans-BoldItalic.ttf', 'LICENSE_LIBERATION']) cpSync(join(pdfjs, 'standard_fonts', f), join(fonts, f));
+console.log('Fonts copied to', fonts);
