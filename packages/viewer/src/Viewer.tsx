@@ -1,6 +1,20 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { PdfDocument } from '@pdfsuite/engine';
 import {
+  annotationBounds,
+  baseFields,
+  mergeLineRects,
+  type Annotation,
+  type AnnotationStore,
+  type MarkupType,
+  type Rect,
+} from '@pdfsuite/annotations';
+import { AnnotationLayer } from './AnnotationLayer';
+import { AnnotationToolbar } from './AnnotationToolbar';
+import { CommentsPanel } from './CommentsPanel';
+import { DRAW_TOOLS, MARKUP_TOOLS, STICKY_TOOLS, TOOL_DEFAULTS, type Tool, type ToolStyle } from './annotationTools';
+import { useAnnotations, useStoreFlags } from './useAnnotationStore';
+import {
   anchorAt,
   clampZoom,
   computeLayout,
@@ -29,11 +43,21 @@ export interface PdfViewerProps {
   doc: PdfDocument;
   /** Document used for text layer and search (needs `getTextItems`). May be the same object as `doc`. */
   textDoc: PdfDocument | null;
+  /** Enables the annotation toolbar, overlay and comments panel. */
+  annotations?: AnnotationSupport;
 }
 
-type SidebarTab = 'pages' | 'search';
+export interface AnnotationSupport {
+  store: AnnotationStore;
+  author: string;
+  onAuthorChange(name: string): void;
+  onSave(): void;
+  saving: boolean;
+}
 
-export function PdfViewer({ doc, textDoc }: PdfViewerProps) {
+type SidebarTab = 'pages' | 'search' | 'comments';
+
+export function PdfViewer({ doc, textDoc, annotations: ann }: PdfViewerProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [sizes, setSizes] = useState<Size[]>([]);
@@ -47,6 +71,85 @@ export function PdfViewer({ doc, textDoc }: PdfViewerProps) {
   useEffect(() => () => queue.dispose(), [queue]);
   const textCache = useMemo(() => (textDoc ? new TextCache(textDoc) : null), [textDoc]);
   const search = useSearch(textCache);
+
+  // ---- annotations
+  const store = ann?.store;
+  const allAnnotations = useAnnotations(store);
+  const flags = useStoreFlags(store);
+  const [tool, setToolState] = useState<Tool>('select');
+  const [toolStyles, setToolStyles] = useState<Record<Tool, ToolStyle>>(TOOL_DEFAULTS);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const author = ann?.author ?? '';
+  const selected = selectedId ? allAnnotations.find((a) => a.id === selectedId) : undefined;
+  const byPage = useMemo(() => {
+    const m = new Map<number, Annotation[]>();
+    for (const a of allAnnotations) {
+      if (a.type === 'reply') continue;
+      const l = m.get(a.page);
+      if (l) l.push(a);
+      else m.set(a.page, [a]);
+    }
+    return m;
+  }, [allAnnotations]);
+  const commentCount = useMemo(() => allAnnotations.filter((a) => a.type !== 'reply').length, [allAnnotations]);
+  // Drop the selection if the annotation disappears (delete / undo).
+  useEffect(() => {
+    if (selectedId && !selected) setSelectedId(null);
+  }, [selectedId, selected]);
+
+  const setTool = useCallback((t: Tool) => {
+    setToolState(t);
+    if (t !== 'select') {
+      setSelectedId(null);
+      setEditingId(null);
+    }
+  }, []);
+  const toolStyle = toolStyles[tool];
+  const activeStyle: ToolStyle = selected
+    ? {
+        color: selected.color,
+        opacity: selected.opacity,
+        width: 'width' in selected ? selected.width : toolStyle.width,
+        fontSize: selected.type === 'freetext' ? selected.fontSize : toolStyle.fontSize,
+      }
+    : toolStyle;
+  const applyStyle = useCallback(
+    (patch: Partial<ToolStyle>) => {
+      if (selected && store) {
+        const next: Record<string, unknown> = {};
+        if (patch.color !== undefined) next.color = patch.color;
+        if (patch.opacity !== undefined) next.opacity = patch.opacity;
+        if (patch.width !== undefined && 'width' in selected) next.width = patch.width;
+        if (patch.fontSize !== undefined && selected.type === 'freetext') next.fontSize = patch.fontSize;
+        store.update(selected.id, next as Partial<Annotation>, { coalesceKey: `style:${selected.id}` });
+      } else {
+        setToolStyles((s) => ({ ...s, [tool]: { ...s[tool], ...patch } }));
+      }
+    },
+    [selected, store, tool],
+  );
+  const onCreated = useCallback((a: Annotation) => {
+    setSelectedId(a.id);
+    if (a.type === 'note') {
+      setSidebar('comments');
+      // Wait until the pointer interaction has finished; otherwise the browser moves focus back to the page.
+      setTimeout(() => setFocusId(a.id), 80);
+      setTimeout(() => setFocusId(null), 600);
+    }
+  }, []);
+  const selectFromPanel = useCallback((id: string) => {
+    setSelectedId(id);
+    setToolState('select');
+    const a = store?.get(id);
+    const l = layoutRef.current;
+    const el = scrollRef.current;
+    if (a && el && l.tops[a.page] !== undefined) {
+      const top = l.tops[a.page]!;
+      el.scrollTo({ top: Math.max(0, top + annotationBounds(a).y * zoomRef.current - 80) });
+    }
+  }, [store]);
 
   // ---- page sizes: first page immediately, the rest in the background
   useEffect(() => {
@@ -95,6 +198,8 @@ export function PdfViewer({ doc, textDoc }: PdfViewerProps) {
   }, []);
 
   // ---- zoom + layout
+  const sizesRef = useRef(sizes);
+  sizesRef.current = sizes;
   const maxPageWidth = useMemo(() => sizes.reduce((m, s) => Math.max(m, s.width), 1), [sizes]);
   const zoom = useMemo(() => {
     if (!sizes.length || !viewport.width) return 1;
@@ -192,6 +297,56 @@ export function PdfViewer({ doc, textDoc }: PdfViewerProps) {
     }, 0);
   }, []);
 
+  const onToolDone = useCallback(() => {
+    setToolState((t) => (STICKY_TOOLS.includes(t) ? t : 'select'));
+  }, []);
+
+  // ---- text markup tools: turn the current text selection into highlight/underline/... annotations
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !store || !MARKUP_TOOLS.includes(tool)) return;
+    const onUp = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+      const range = sel.getRangeAt(0);
+      const style = toolStyles[tool];
+      const created: Annotation[] = [];
+      for (const pageEl of el.querySelectorAll<HTMLElement>('.pv-page')) {
+        const idx = Number(pageEl.dataset.page);
+        const size = sizesRef.current[idx];
+        if (!size) continue;
+        const pr = pageEl.getBoundingClientRect();
+        const k = pr.width / size.width;
+        const rects: Rect[] = [];
+        for (const span of pageEl.querySelectorAll<HTMLElement>('.pv-text')) {
+          if (!range.intersectsNode(span)) continue;
+          const tn = span.firstChild;
+          if (!tn || tn.nodeType !== Node.TEXT_NODE) continue;
+          const len = (tn.textContent ?? '').length;
+          const sub = document.createRange();
+          const start = range.startContainer === tn ? range.startOffset : range.startContainer === span ? (range.startOffset > 0 ? len : 0) : 0;
+          const end = range.endContainer === tn ? range.endOffset : range.endContainer === span ? (range.endOffset > 0 ? len : 0) : len;
+          if (end <= start) continue;
+          sub.setStart(tn, start);
+          sub.setEnd(tn, end);
+          for (const cr of sub.getClientRects()) {
+            rects.push({ x: (cr.left - pr.left) / k, y: (cr.top - pr.top) / k, width: cr.width / k, height: cr.height / k });
+          }
+        }
+        const quads = mergeLineRects(rects);
+        if (quads.length) {
+          created.push({ ...baseFields(idx, author, style.color, style.opacity), type: tool as MarkupType, quads } as Annotation);
+        }
+      }
+      if (!created.length) return;
+      store.transact('Add markup', () => created.forEach((a) => store.add(a)));
+      sel.removeAllRanges();
+      setSelectedId(created[0]!.id);
+    };
+    el.addEventListener('mouseup', onUp);
+    return () => el.removeEventListener('mouseup', onUp);
+  }, [tool, store, toolStyles, author]);
+
   // ---- keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -214,6 +369,22 @@ export function PdfViewer({ doc, textDoc }: PdfViewerProps) {
       } else if (mod && e.key === '2') {
         e.preventDefault();
         setZoomMode({ kind: 'fit-width' });
+      } else if (store && mod && e.key.toLowerCase() === 'z' && !isTextField(e.target)) {
+        e.preventDefault();
+        if (e.shiftKey) store.redo();
+        else store.undo();
+      } else if (store && mod && e.key.toLowerCase() === 'y' && !isTextField(e.target)) {
+        e.preventDefault();
+        store.redo();
+      } else if (mod && e.key.toLowerCase() === 's' && ann) {
+        e.preventDefault();
+        ann.onSave();
+      } else if (store && (e.key === 'Delete' || e.key === 'Backspace') && selectedId && !isTextField(e.target)) {
+        e.preventDefault();
+        store.remove(selectedId);
+      } else if (e.key === 'Escape' && !isTextField(e.target) && (tool !== 'select' || selectedId)) {
+        setToolState('select');
+        setSelectedId(null);
       } else if (e.key === 'F3') {
         e.preventDefault();
         if (e.shiftKey) search.prev();
@@ -240,7 +411,7 @@ export function PdfViewer({ doc, textDoc }: PdfViewerProps) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [goToPage, openSearch, search, sidebar, zoomBy]);
+  }, [goToPage, openSearch, search, sidebar, zoomBy, store, ann, selectedId, tool]);
 
   // ---- render
   const range = visibleRange(layout, scrollTop, viewport.height, viewport.height);
@@ -260,12 +431,32 @@ export function PdfViewer({ doc, textDoc }: PdfViewerProps) {
         distanceRef={distanceRef}
         matches={search.byPage.get(i) ?? EMPTY}
         activeMatch={activeMatch?.page === i ? activeMatch : null}
+        overlay={
+          store ? (
+            <AnnotationLayer
+              page={i}
+              size={sizes[i]!}
+              zoom={zoom}
+              annotations={byPage.get(i) ?? EMPTY_ANN}
+              tool={tool}
+              style={toolStyle}
+              author={author}
+              selectedId={selectedId}
+              editingId={editingId}
+              store={store}
+              onSelect={setSelectedId}
+              onEdit={setEditingId}
+              onCreated={onCreated}
+              onToolDone={onToolDone}
+            />
+          ) : null
+        }
       />,
     );
   }
 
   return (
-    <div className="pv-root">
+    <div className={`pv-root pv-tool-${tool}${DRAW_TOOLS.includes(tool) ? ' pv-tool-draw' : ''}`}>
       <Toolbar
         sidebar={sidebar}
         onSidebar={(t) => setSidebar((s) => (s === t ? null : t))}
@@ -277,12 +468,40 @@ export function PdfViewer({ doc, textDoc }: PdfViewerProps) {
         onZoomMode={setZoomMode}
         onZoomBy={zoomBy}
         onFind={openSearch}
+        commentCount={ann ? commentCount : undefined}
       />
+      {ann && store && (
+        <AnnotationToolbar
+          tool={tool}
+          onTool={setTool}
+          style={activeStyle}
+          onStyle={applyStyle}
+          selected={selected && selected.type !== 'reply' ? selected : undefined}
+          canUndo={flags.canUndo}
+          canRedo={flags.canRedo}
+          dirty={flags.dirty}
+          saving={ann.saving}
+          onUndo={() => store.undo()}
+          onRedo={() => store.redo()}
+          onDelete={() => selectedId && store.remove(selectedId)}
+          onSave={ann.onSave}
+        />
+      )}
       <div className="pv-body">
         {sidebar && (
-          <aside className="pv-sidebar">
+          <aside className={sidebar === 'search' || sidebar === 'comments' ? 'pv-sidebar pv-sidebar-wide' : 'pv-sidebar'}>
             {sidebar === 'pages' ? (
               <Thumbnails doc={doc} sizes={sizes} queue={queue} current={current} onSelect={goToPage} />
+            ) : sidebar === 'comments' && ann && store ? (
+              <CommentsPanel
+                store={store}
+                annotations={allAnnotations}
+                selectedId={selectedId}
+                onSelect={selectFromPanel}
+                author={ann.author}
+                onAuthorChange={ann.onAuthorChange}
+                focusId={focusId}
+              />
             ) : (
               <SearchPanel ref={searchInputRef} search={search} pageCount={doc.pageCount} textAvailable={!!textCache} />
             )}
@@ -298,7 +517,13 @@ export function PdfViewer({ doc, textDoc }: PdfViewerProps) {
   );
 }
 
+const isTextField = (t: EventTarget | null) => {
+  const el = t as HTMLElement | null;
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
+};
+
 const EMPTY: never[] = [];
+const EMPTY_ANN: Annotation[] = [];
 
 function Toolbar(props: {
   sidebar: SidebarTab | null;
@@ -311,6 +536,7 @@ function Toolbar(props: {
   onZoomMode(m: ZoomMode): void;
   onZoomBy(d: 1 | -1): void;
   onFind(): void;
+  commentCount?: number;
 }) {
   const { page, pageCount, zoom, zoomMode } = props;
   const [text, setText] = useState(String(page + 1));
@@ -392,6 +618,11 @@ function Toolbar(props: {
       <button onClick={props.onFind} aria-pressed={props.sidebar === 'search'} title="Find (Ctrl+F)">
         🔍 Find
       </button>
+      {props.commentCount !== undefined && (
+        <button aria-pressed={props.sidebar === 'comments'} onClick={() => props.onSidebar('comments')} title="Comments panel">
+          💬 Comments{props.commentCount ? ` (${props.commentCount})` : ''}
+        </button>
+      )}
     </div>
   );
 }

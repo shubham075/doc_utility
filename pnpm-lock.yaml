@@ -205,6 +205,9 @@ importers:
       '@hyzyla/pdfium':
         specifier: ^3.0.0
         version: 3.0.0
+      '@pdfsuite/annotations':
+        specifier: workspace:*
+        version: link:../../packages/annotations
       '@pdfsuite/engine':
         specifier: workspace:*
         version: link:../../packages/engine
@@ -237,6 +240,31 @@ importers:
         specifier: ^8.3.4
         version: 8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(tsx@4.23.15)
 
+  packages/annotations:
+    dependencies:
+      pdf-lib:
+        specifier: ^1.17.1
+        version: 1.17.1
+    devDependencies:
+      '@napi-rs/canvas':
+        specifier: ^1.0.11
+        version: 1.0.11
+      '@pdfsuite/engine':
+        specifier: workspace:*
+        version: link:../engine
+      '@types/node':
+        specifier: ^26.6.5
+        version: 26.6.5
+      pdfjs-dist:
+        specifier: ^6.4.299
+        version: 6.4.299
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^5.0.4
+        version: 5.0.4(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(tsx@4.23.15))
+
   packages/engine:
     dependencies:
       '@hyzyla/pdfium':
@@ -258,6 +286,9 @@ importers:
 
   packages/viewer:
     dependencies:
+      '@pdfsuite/annotations':
+        specifier: workspace:*
+        version: link:../annotations
       '@pdfsuite/engine':
         specifier: workspace:*
         version: link:../engine

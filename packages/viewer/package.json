@@ -14,6 +14,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@pdfsuite/annotations": "workspace:*",
     "@pdfsuite/engine": "workspace:*",
     "react": "^19.3.0"
   },

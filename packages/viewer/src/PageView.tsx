@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { PdfDocument, TextItem } from '@pdfsuite/engine';
 import type { Size } from './layout';
 import type { RenderQueue } from './renderQueue';
@@ -43,6 +43,8 @@ interface Props {
   distanceRef: React.RefObject<(index: number) => number>;
   matches: SearchMatch[];
   activeMatch: SearchMatch | null;
+  /** Rendered above the text layer; fills the page box (so blend modes can see the page bitmap). */
+  overlay?: ReactNode;
 }
 
 export const PageView = memo(function PageView({
@@ -57,6 +59,7 @@ export const PageView = memo(function PageView({
   distanceRef,
   matches,
   activeMatch,
+  overlay,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hasBitmap = useRef(false);
@@ -117,6 +120,7 @@ export const PageView = memo(function PageView({
         <Highlights matches={matches} active={activeMatch} />
         <TextLayer items={items} />
       </div>
+      {overlay}
     </div>
   );
 });

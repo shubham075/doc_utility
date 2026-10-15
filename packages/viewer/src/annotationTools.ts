@@ -1,0 +1,77 @@
+export type Tool =
+  | 'select'
+  | 'highlight'
+  | 'underline'
+  | 'strikeout'
+  | 'squiggly'
+  | 'note'
+  | 'textbox'
+  | 'ink'
+  | 'rect'
+  | 'ellipse'
+  | 'line'
+  | 'arrow';
+
+export interface ToolStyle {
+  color: string;
+  opacity: number;
+  /** Stroke width in points (ink, shapes, lines). */
+  width: number;
+  /** Text box font size in points. */
+  fontSize: number;
+}
+
+export const MARKUP_TOOLS: Tool[] = ['highlight', 'underline', 'strikeout', 'squiggly'];
+/** Tools that capture pointer drags/clicks on the page itself. */
+export const DRAW_TOOLS: Tool[] = ['note', 'textbox', 'ink', 'rect', 'ellipse', 'line', 'arrow'];
+/** Tools that stay active after one use. */
+export const STICKY_TOOLS: Tool[] = [...MARKUP_TOOLS, 'ink', 'rect', 'ellipse', 'line', 'arrow'];
+
+export const TOOL_LABELS: Record<Tool, string> = {
+  select: 'Select',
+  highlight: 'Highlight',
+  underline: 'Underline',
+  strikeout: 'Strike',
+  squiggly: 'Squiggly',
+  note: 'Note',
+  textbox: 'Text',
+  ink: 'Draw',
+  rect: 'Rect',
+  ellipse: 'Ellipse',
+  line: 'Line',
+  arrow: 'Arrow',
+};
+
+export const TOOL_TITLES: Record<Tool, string> = {
+  select: 'Select / move annotations (Esc)',
+  highlight: 'Highlight text — select text, then release',
+  underline: 'Underline text',
+  strikeout: 'Strikethrough text',
+  squiggly: 'Squiggly underline',
+  note: 'Add a sticky note — click on the page',
+  textbox: 'Add a text box — drag on the page',
+  ink: 'Freehand drawing',
+  rect: 'Rectangle',
+  ellipse: 'Ellipse',
+  line: 'Line',
+  arrow: 'Arrow',
+};
+
+export const PALETTE = ['#ffeb3b', '#ff9800', '#f44336', '#e91e63', '#4caf50', '#2196f3', '#9c27b0', '#111111'];
+
+const base: ToolStyle = { color: '#f44336', opacity: 1, width: 2, fontSize: 14 };
+
+export const TOOL_DEFAULTS: Record<Tool, ToolStyle> = {
+  select: base,
+  highlight: { ...base, color: '#ffeb3b', opacity: 1 },
+  underline: { ...base, color: '#f44336' },
+  strikeout: { ...base, color: '#f44336' },
+  squiggly: { ...base, color: '#f44336' },
+  note: { ...base, color: '#ffeb3b' },
+  textbox: { ...base, color: '#111111' },
+  ink: { ...base },
+  rect: { ...base },
+  ellipse: { ...base },
+  line: { ...base },
+  arrow: { ...base },
+};
