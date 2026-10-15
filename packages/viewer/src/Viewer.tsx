@@ -23,6 +23,7 @@ import { SignatureDialog } from './SignatureDialog';
 import { PageOrganizer } from './PageOrganizer';
 import { CombineDialog, CropDialog, HeaderFooterDialog, SplitDialog, WatermarkDialog, type DialogKind, type PageTools } from './PageToolDialogs';
 import { OutlinePanel, PageToolbar } from './PageToolbar';
+import { CompressDialog, CreateDialog, ExportDialog, OcrDialog, type ConvertDialogKind, type ConvertTools } from './ConvertDialogs';
 import { loadSignature, type SavedSignature, type SignatureKind } from './signatures';
 import {
   anchorAt,
@@ -59,6 +60,8 @@ export interface PdfViewerProps {
   forms?: FormSupport;
   /** Enables organize/combine/split/crop/header-footer/watermark. */
   pages?: PageTools;
+  /** Enables create/export/compress/OCR. */
+  convert?: ConvertTools;
 }
 
 export interface FormSupport {
@@ -79,7 +82,7 @@ export interface AnnotationSupport {
 
 type SidebarTab = 'pages' | 'search' | 'comments' | 'bookmarks';
 
-export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTools }: PdfViewerProps) {
+export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTools, convert }: PdfViewerProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [sizes, setSizes] = useState<Size[]>([]);
@@ -119,6 +122,7 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
   const [organizing, setOrganizing] = useState(false);
   const [dialog, setDialog] = useState<DialogKind | null>(null);
   const bookmarkCount = pageTools?.outline.length ?? 0;
+  const [convertDialog, setConvertDialog] = useState<ConvertDialogKind | null>(null);
 
   // ---- forms + Fill & Sign
   const formStore = forms?.store;
@@ -636,6 +640,27 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
           busy={pageTools.busy}
         />
       )}
+      {convert && (
+        <div className="pv-toolbar pv-annbar" role="toolbar" aria-label="Convert">
+          <strong className="pv-muted">Convert</strong>
+          <button onClick={() => setConvertDialog('create')} title="Create a PDF from images, Office files, HTML or a scanner">
+            Create PDF
+          </button>
+          <button onClick={() => setConvertDialog('export')} title="Export pages as images or text">
+            Export
+          </button>
+          <button onClick={() => setConvertDialog('compress')} title="Reduce the file size">
+            Compress
+          </button>
+          <button onClick={() => setConvertDialog('ocr')} title="Make scanned pages searchable">
+            Recognize text
+          </button>
+          <span className="pv-spacer" />
+          <span className="pv-muted" title={convert.server ? 'API service connected' : 'API service not reachable: Office/HTML conversion is unavailable'}>
+            {convert.server ? '● server' : '○ offline'}
+          </span>
+        </div>
+      )}
       {ann && store && (
         <AnnotationToolbar
           tool={tool}
@@ -674,6 +699,14 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
         </div>
       )}
       {sigDialog && <SignatureDialog kind={sigDialog.kind} onDone={onSigDone} />}
+      {convert && convertDialog && (
+        <>
+          {convertDialog === 'create' && <CreateDialog tools={convert} pageCount={doc.pageCount} currentPage={current} onClose={() => setConvertDialog(null)} />}
+          {convertDialog === 'export' && <ExportDialog tools={convert} pageCount={doc.pageCount} currentPage={current} onClose={() => setConvertDialog(null)} />}
+          {convertDialog === 'compress' && <CompressDialog tools={convert} pageCount={doc.pageCount} currentPage={current} onClose={() => setConvertDialog(null)} />}
+          {convertDialog === 'ocr' && <OcrDialog tools={convert} pageCount={doc.pageCount} currentPage={current} onClose={() => setConvertDialog(null)} />}
+        </>
+      )}
       {pageTools && dialog && (
         <>
           {dialog === 'combine' && <CombineDialog tools={pageTools} pageCount={doc.pageCount} currentPage={current} onClose={() => setDialog(null)} />}

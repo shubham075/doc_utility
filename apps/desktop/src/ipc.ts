@@ -4,6 +4,7 @@ export const IPC = {
   readFile: 'file:read',
   fileOpened: 'file:opened', // main -> renderer (OS file association, second instance)
   saveDialog: 'file:save',
+  scan: 'scan:acquire',
 } as const;
 
 export interface OpenedFile {

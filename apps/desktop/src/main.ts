@@ -1,5 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron';
-import { readFile, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, extname, join, normalize, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { IPC, type OpenedFile } from './ipc';
@@ -99,7 +101,49 @@ function registerAppProtocol() {
   });
 }
 
+const FILTERS: Record<string, string> = { pdf: 'PDF documents', zip: 'ZIP archive', txt: 'Text file', json: 'JSON file', png: 'PNG image', jpg: 'JPEG image' };
+function saveFilters(name: string): Electron.FileFilter[] {
+  const ext = extname(name).slice(1).toLowerCase();
+  return [{ name: FILTERS[ext] ?? 'Files', extensions: [FILTERS[ext] ? ext : '*'] }];
+}
+
+/**
+ * Windows only: show the system scanner dialog (WIA) and return the scanned page as PNG bytes.
+ * The output path is passed through the environment, never interpolated into the script.
+ * NOTE: needs a physical WIA scanner to exercise; the failure paths are covered by returning a clear error.
+ */
+async function acquireScan(): Promise<Uint8Array | null> {
+  if (process.platform !== 'win32') throw new Error('Scanning is only supported on Windows');
+  const dir = await mkdtemp(join(tmpdir(), 'pdfsuite-scan-'));
+  const out = join(dir, 'scan.png');
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$dlg = New-Object -ComObject WIA.CommonDialog',
+    // 1 = scanner, 1 = colour, 4 = maximize quality, PNG format id, no device dialog bypass
+    "$img = $dlg.ShowAcquireImage(1, 1, 4, '{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}', $false, $true, $false)",
+    'if ($null -eq $img) { exit 3 }',
+    '$img.SaveFile($env:PDFSUITE_SCAN_OUT)',
+  ].join('; ');
+  try {
+    await new Promise<void>((resolve, reject) => {
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], { env: { ...process.env, PDFSUITE_SCAN_OUT: out }, windowsHide: false, timeout: 5 * 60_000 }, (err, _so, stderr) => {
+        if (!err) return resolve();
+        if ((err as { code?: number }).code === 3) return reject(Object.assign(new Error('cancelled'), { cancelled: true }));
+        reject(new Error(stderr?.split(/\r?\n/)[0] || 'No scanner found or the scan failed'));
+      });
+    });
+    const buf = await readFile(out);
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  } catch (e) {
+    if ((e as { cancelled?: boolean }).cancelled) return null;
+    throw e;
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 function registerIpc() {
+  ipcMain.handle(IPC.scan, () => acquireScan());
   ipcMain.handle(IPC.openDialog, async (): Promise<OpenedFile[]> => {
     const r = await dialog.showOpenDialog(mainWindow!, {
       properties: ['openFile', 'multiSelections'],
@@ -110,7 +154,7 @@ function registerIpc() {
   ipcMain.handle(IPC.saveDialog, async (_e, suggestedName: string, bytes: Uint8Array) => {
     const r = await dialog.showSaveDialog(mainWindow!, {
       defaultPath: basename(String(suggestedName)),
-      filters: extname(String(suggestedName)).toLowerCase() === '.zip' ? [{ name: 'ZIP archive', extensions: ['zip'] }] : [{ name: 'PDF documents', extensions: ['pdf'] }],
+      filters: saveFilters(String(suggestedName)),
     });
     if (r.canceled || !r.filePath) return null;
     await writeFile(r.filePath, bytes); // TODO(phase 3+): atomic write (temp + rename)

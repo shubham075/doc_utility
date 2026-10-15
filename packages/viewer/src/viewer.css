@@ -765,3 +765,30 @@ textarea.pv-widget {
 .pv-body[hidden] {
   display: none;
 }
+
+/* ---------------------------------------------------------------- convert */
+.pv-progress {
+  position: relative;
+  height: 20px;
+  border: 1px solid var(--pv-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.pv-progress > div {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: color-mix(in srgb, var(--pv-accent) 55%, transparent);
+  transition: width 0.2s;
+}
+.pv-progress > span {
+  position: relative;
+  display: block;
+  text-align: center;
+  font-size: 12px;
+  line-height: 18px;
+}
+.pv-radio-row {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 8px;
+}

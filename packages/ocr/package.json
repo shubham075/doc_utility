@@ -1,0 +1,31 @@
+{
+  "name": "@pdfsuite/ocr",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@pdfsuite/annotations": "workspace:*",
+    "@pdfsuite/engine": "workspace:*",
+    "pdf-lib": "^1.17.1",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "^1.0.11",
+    "@pdfsuite/pages": "workspace:*",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@types/node": "^26.6.5",
+    "pdfjs-dist": "^6.4.299",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  }
+}

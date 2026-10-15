@@ -1,0 +1,31 @@
+{
+  "name": "@pdfsuite/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.3.1",
+    "@fastify/multipart": "^10.1.3",
+    "@napi-rs/canvas": "^1.0.11",
+    "@pdfsuite/convert": "workspace:*",
+    "@pdfsuite/engine": "workspace:*",
+    "@pdfsuite/ocr": "workspace:*",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "fastify": "^5.12.7",
+    "pdf-lib": "^1.17.1",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  }
+}

@@ -43,7 +43,7 @@ interface Common {
 
 // ---------------------------------------------------------------- shared bits
 
-function Modal({ title, onClose, children, wide }: { title: string; onClose(): void; children: ReactNode; wide?: boolean }) {
+export function Modal({ title, onClose, children, wide }: { title: string; onClose(): void; children: ReactNode; wide?: boolean }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -61,7 +61,7 @@ function Modal({ title, onClose, children, wide }: { title: string; onClose(): v
 
 type Scope = 'all' | 'current' | 'odd' | 'even' | 'range';
 
-function useScope(pageCount: number, current: number) {
+export function useScope(pageCount: number, current: number) {
   const [scope, setScope] = useState<Scope>('all');
   const [range, setRange] = useState('');
   let pages: number[] = [];
@@ -79,7 +79,7 @@ function useScope(pageCount: number, current: number) {
   return { scope, setScope, range, setRange, pages, error };
 }
 
-function ScopeInput({ s }: { s: ReturnType<typeof useScope> }) {
+export function ScopeInput({ s }: { s: ReturnType<typeof useScope> }) {
   return (
     <fieldset className="pv-fieldset">
       <legend>Pages</legend>
@@ -97,7 +97,7 @@ function ScopeInput({ s }: { s: ReturnType<typeof useScope> }) {
   );
 }
 
-function useRun(onClose: () => void) {
+export function useRun(onClose: () => void) {
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const run = async (fn: () => Promise<void>) => {
@@ -115,7 +115,7 @@ function useRun(onClose: () => void) {
   return { error, running, run };
 }
 
-const Footer = ({ error, running, onClose, action, onAction, disabled }: { error: string | null; running: boolean; onClose(): void; action: string; onAction(): void; disabled?: boolean }) => (
+export const Footer = ({ error, running, onClose, action, onAction, disabled }: { error: string | null; running: boolean; onClose(): void; action: string; onAction(): void; disabled?: boolean }) => (
   <>
     {error && <div className="pv-error">{error}</div>}
     <div className="pv-search-row">
@@ -128,7 +128,7 @@ const Footer = ({ error, running, onClose, action, onAction, disabled }: { error
   </>
 );
 
-const num = (v: string, fallback = 0) => (Number.isFinite(Number(v)) && v.trim() !== '' ? Number(v) : fallback);
+export const num = (v: string, fallback = 0) => (Number.isFinite(Number(v)) && v.trim() !== '' ? Number(v) : fallback);
 
 // ---------------------------------------------------------------- crop
 

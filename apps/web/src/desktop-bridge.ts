@@ -9,6 +9,8 @@ export interface DesktopBridge {
   openFileDialog(): Promise<DesktopFile[]>;
   saveFile(suggestedName: string, bytes: Uint8Array): Promise<string | null>;
   onFileOpened(cb: (file: DesktopFile) => void): () => void;
+  /** Windows only: acquire one page from a WIA scanner. Resolves null if the user cancelled. */
+  scan?(): Promise<Uint8Array | null>;
 }
 declare global {
   interface Window {

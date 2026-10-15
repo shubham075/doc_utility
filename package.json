@@ -14,7 +14,8 @@
     "bench": "pnpm --filter @pdfsuite/bench bench",
     "format": "prettier --write .",
     "dev:desktop": "concurrently -k -n web,app \"pnpm dev:web\" \"pnpm --filter @pdfsuite/desktop dev\"",
-    "start:desktop": "pnpm build && pnpm --filter @pdfsuite/desktop start"
+    "start:desktop": "pnpm build && pnpm --filter @pdfsuite/desktop start",
+    "dev:services": "pnpm --filter @pdfsuite/api dev"
   },
   "devDependencies": {
     "concurrently": "^10.0.6",

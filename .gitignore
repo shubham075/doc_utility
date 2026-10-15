@@ -8,3 +8,5 @@ corpus/*.pdf
 tools/bench/results.json
 out/
 apps/web/public/sample200.pdf
+.cache-test/
+apps/web/public/ocr/

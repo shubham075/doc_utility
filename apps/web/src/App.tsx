@@ -21,7 +21,11 @@ import {
   type OutlineItem,
   type PlanItem,
 } from '@pdfsuite/pages';
-import { PdfViewer, type PageTools } from '@pdfsuite/viewer';
+import { PdfViewer, type ConvertTools, type PageTools } from '@pdfsuite/viewer';
+import { exportImages, exportText, imagesToPdf, optimizePdf, zipFiles, type SourceImage } from '@pdfsuite/convert';
+import { createTesseractRecognizer, ocrPdf } from '@pdfsuite/ocr';
+import { browserEncoder, browserRecompressor, toPdfImage } from './browserImage';
+import { getCapabilities, runJob, type Capabilities } from './services';
 import { desktop } from './desktop-bridge';
 import { getEngine, type EngineId } from './engines';
 import { getScriptRunner } from './scripts';
@@ -66,6 +70,8 @@ export function App() {
   const [history, setHistory] = useState<{ undo: Uint8Array[]; redo: Uint8Array[] }>({ undo: [], redo: [] });
   const [modified, setModified] = useState(false);
   const [pageBusy, setPageBusy] = useState(false);
+  /** Result of the last convert/compress/OCR run (the dialog itself is gone once the document reloads). */
+  const [notice, setNotice] = useState<string | null>(null);
   const pendingModified = useRef(false);
   const openedRef = useRef<Opened | null>(null);
 
@@ -297,6 +303,7 @@ export function App() {
       try {
         const flushed = await build(baseRef.current, false);
         const out = await fn(flushed);
+        if (out === flushed) return; // nothing changed: keep history clean
         setHistory((h) => ({ undo: [...h.undo.slice(-9), flushed], redo: [] }));
         pendingModified.current = true;
         setBytes(out);
@@ -399,6 +406,158 @@ export function App() {
     };
   }, [prepared, fileName, pageBusy, saving, history, stepHistory, runEdit, build, deliver, baseName]);
 
+  // ---------------------------------------------------------------- convert / compress / OCR
+  const [caps, setCaps] = useState<Capabilities | null>(null);
+  useEffect(() => {
+    void getCapabilities().then(setCaps);
+  }, []);
+
+  /** Open the current document (with pending edits applied) in a throw-away engine instance. */
+  const withFlushedDoc = useCallback(
+    async <T,>(fn: (doc: PdfDocument, bytes: Uint8Array) => Promise<T>): Promise<T> => {
+      if (!baseRef.current) throw new Error('No document is open');
+      const flushed = await build(baseRef.current, false);
+      const doc = await (await getEngine('pdfium')).open(flushed);
+      try {
+        return await fn(doc, flushed);
+      } finally {
+        doc.close();
+      }
+    },
+    [build],
+  );
+
+  const convertTools = useMemo<ConvertTools>(() => {
+    const kindOf = (f: File) => {
+      const n = f.name.toLowerCase();
+      if (f.type.startsWith('image/') || /\.(png|jpe?g|gif|bmp|webp|avif)$/.test(n)) return 'image' as const;
+      if (/\.pdf$/.test(n) || f.type === 'application/pdf') return 'pdf' as const;
+      if (/\.(html?|xhtml)$/.test(n)) return 'html' as const;
+      return 'office' as const;
+    };
+    return {
+      server: caps ? { office: caps['office-to-pdf'], html: caps['html-to-pdf'], compress: caps.compress, ocr: caps.ocr } : null,
+      canScan: !!desktop()?.scan,
+      onScan: async () => {
+        const bytes = await desktop()?.scan?.();
+        return bytes ? new File([bytes as BlobPart], `scan-${Date.now()}.png`, { type: 'image/png' }) : null;
+      },
+
+      onCreate: async (files, opts, progress) => {
+        const parts: Uint8Array[] = [];
+        let images: SourceImage[] = [];
+        const flushImages = async () => {
+          if (!images.length) return;
+          parts.push(await imagesToPdf(images, { pageSize: opts.pageSize }));
+          images = [];
+        };
+        for (let i = 0; i < files.length; i++) {
+          const f = files[i]!;
+          progress(i / files.length, f.name);
+          const kind = kindOf(f);
+          if (kind === 'image') {
+            images.push(await toPdfImage(f));
+            continue;
+          }
+          await flushImages();
+          const data = new Uint8Array(await f.arrayBuffer());
+          if (kind === 'pdf') parts.push(data);
+          else parts.push((await runJob(kind === 'html' ? 'html-to-pdf' : 'office-to-pdf', { name: f.name, data }, {}, { onProgress: (p) => progress((i + p) / files.length, f.name) })).data);
+        }
+        await flushImages();
+        progress(1, 'Assembling');
+        const counts = await Promise.all(parts.map(countPages));
+        const merged =
+          parts.length === 1
+            ? parts[0]!
+            : await assemble(parts, parts.flatMap((_, k) => itemsFromSource(k, Array.from({ length: counts[k]! }, (_, p) => p))));
+        if (opts.mode === 'new') {
+          if (anyDirty && !window.confirm('Discard the unsaved changes in the current document?')) return;
+          load(merged, files[0]!.name.replace(/\.[^.]+$/, '') + '.pdf');
+        } else {
+          await runEdit(async (b) => {
+            const n = await countPages(b);
+            const m = await countPages(merged);
+            return assemble([b, merged], [...itemsFromSource(0, Array.from({ length: n }, (_, k) => k)), ...itemsFromSource(1, Array.from({ length: m }, (_, k) => k))]);
+          });
+        }
+      },
+
+      onExport: async (kind, pages, opts, progress) => {
+        await withFlushedDoc(async (doc) => {
+          if (kind === 'text') {
+            const text = await exportText(doc, pages, (d, t) => progress(d / t));
+            await deliver(new TextEncoder().encode(text), `${baseName}.txt`);
+            return;
+          }
+          const files = await exportImages(doc, pages, { ...opts, baseName }, browserEncoder, (d, t) => progress(d / t, `Page ${d} of ${t}`));
+          if (files.length === 1) await deliver(files[0]!.data, files[0]!.name);
+          else await deliver(zipFiles(files), `${baseName}-images.zip`);
+        });
+      },
+
+      onCompress: async (opts, progress) => {
+        let sizes = { before: 0, after: 0 };
+        await runEdit(async (b) => {
+          sizes = { before: b.length, after: b.length };
+          let out: Uint8Array;
+          if (opts.where === 'server') {
+            out = (await runJob('compress', { name: fileName || 'document.pdf', data: b }, { preset: opts.preset, stripMetadata: opts.stripMetadata, removeThumbnails: opts.removeThumbnails }, { onProgress: (p) => progress(p) })).data;
+          } else {
+            out = (await optimizePdf(b, { preset: opts.preset, stripMetadata: opts.stripMetadata, removeThumbnails: opts.removeThumbnails, recompress: browserRecompressor, onProgress: (d, t) => progress(d / Math.max(1, t), 'Optimizing images') })).bytes;
+          }
+          sizes.after = Math.min(out.length, b.length);
+          return out.length < b.length ? out : b;
+        });
+        const kbs = (n: number) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+        setNotice(sizes.after < sizes.before ? `Compressed from ${kbs(sizes.before)} to ${kbs(sizes.after)} (${Math.round((1 - sizes.after / sizes.before) * 100)}% smaller)` : `No further savings possible (${kbs(sizes.before)})`);
+        return sizes;
+      },
+
+      onOcr: async (opts, progress, signal) => {
+        let outcome = { pages: 0, words: 0 };
+        await runEdit(async (b) => {
+          if (opts.where === 'server') {
+            const r = await runJob('ocr', { name: fileName || 'document.pdf', data: b }, { pages: opts.pages.map((p) => p + 1), dpi: opts.dpi, skipPagesWithText: opts.skipPagesWithText }, { onProgress: (p) => progress(p), signal });
+            outcome = { pages: opts.pages.length, words: 0 };
+            return r.data;
+          }
+          const doc = await (await getEngine('pdfium')).open(b);
+          progress(0, 'Loading OCR engine');
+          const recognizer = await createTesseractRecognizer({
+            langPath: new URL('/ocr/lang', location.href).href,
+            workerPath: new URL('/ocr/worker.min.js', location.href).href,
+            corePath: new URL('/ocr/', location.href).href,
+          });
+          try {
+            const r = await ocrPdf(b, doc, recognizer, {
+              pages: opts.pages,
+              dpi: opts.dpi,
+              skipPagesWithText: opts.skipPagesWithText,
+              signal,
+              onProgress: (d, t, page) => progress(d / t, `Page ${page + 1} (${d} of ${t})`),
+              renderPng: async (d, index, scale) => {
+                const p = await d.getPage(index);
+                try {
+                  return await browserEncoder(await p.render({ scale }), 'png', 1);
+                } finally {
+                  p.close();
+                }
+              },
+            });
+            outcome = { pages: r.pagesProcessed, words: r.words };
+            return r.pagesProcessed ? r.bytes : b;
+          } finally {
+            await recognizer.terminate();
+            doc.close();
+          }
+        });
+        setNotice(outcome.pages ? `Text recognized on ${outcome.pages} page(s)${outcome.words ? ` (${outcome.words} words)` : ''}` : 'Nothing to recognize: the chosen pages already have text');
+        return outcome;
+      },
+    };
+  }, [caps, anyDirty, baseName, build, deliver, fileName, load, runEdit, withFlushedDoc]);
+
   const annotations = useMemo(
     () => (store ? { store, author, onAuthorChange, onSave: save, saving, extraDirty: formDirty } : undefined),
     [store, author, onAuthorChange, save, saving, formDirty],
@@ -424,11 +583,17 @@ export function App() {
       </header>
       <main style={{ flex: 1, minHeight: 0 }}>
         {opened ? (
-          <PdfViewer doc={opened.render} textDoc={opened.text} annotations={annotations} forms={formSupport} pages={pageTools} />
+          <PdfViewer doc={opened.render} textDoc={opened.text} annotations={annotations} forms={formSupport} pages={pageTools} convert={convertTools} />
         ) : (
           <p style={{ padding: 16, color: '#555' }}>{status}</p>
         )}
       </main>
+      {notice && (
+        <div role="status" style={{ padding: '4px 8px', background: '#e8f5e9', color: '#1b5e20', fontSize: 12, display: 'flex', gap: 8 }}>
+          <span>{notice}</span>
+          <button onClick={() => setNotice(null)} aria-label="Dismiss" style={{ marginLeft: 'auto' }}>✕</button>
+        </div>
+      )}
       {opened && <footer style={{ padding: '2px 8px', borderTop: '1px solid #ccc', fontSize: 12 }}>{status}</footer>}
     </div>
   );
@@ -436,15 +601,15 @@ export function App() {
 
 /** File System Access API when available, otherwise a download. Returns false if the user cancelled. */
 async function saveInBrowser(bytes: Uint8Array, name: string): Promise<boolean> {
-  const zip = /\.zip$/i.test(name);
-  const mime = zip ? 'application/zip' : 'application/pdf';
+  const ext = (/\.([a-z0-9]+)$/i.exec(name)?.[1] ?? 'pdf').toLowerCase();
+  const mime = ({ zip: 'application/zip', txt: 'text/plain', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', json: 'application/json' } as Record<string, string>)[ext] ?? 'application/pdf';
   const w = window as unknown as {
     showSaveFilePicker?: (o: unknown) => Promise<{ createWritable(): Promise<{ write(b: BlobPart): Promise<void>; close(): Promise<void> }> }>;
   };
   const blob = new Blob([bytes as BlobPart], { type: mime });
   if (w.showSaveFilePicker) {
     try {
-      const handle = await w.showSaveFilePicker({ suggestedName: name, types: [{ description: zip ? 'ZIP archive' : 'PDF', accept: { [mime]: [zip ? '.zip' : '.pdf'] } }] });
+      const handle = await w.showSaveFilePicker({ suggestedName: name, types: [{ description: ext.toUpperCase() + ' file', accept: { [mime]: ['.' + ext] } }] });
       const stream = await handle.createWritable();
       await stream.write(blob);
       await stream.close();

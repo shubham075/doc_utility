@@ -4,6 +4,9 @@ Internal Acrobat-class PDF viewer/editor. See `PDF_SUITE_IMPLEMENTATION_PLAN.md`
 
 ## Layout
 - `apps/desktop` — Electron shell (sandboxed renderer, `app://` protocol with CSP + COOP/COEP, native open/save, file association)
+- `packages/convert` — images→PDF, export images/text, compress/optimize
+- `packages/ocr` — tesseract.js OCR + invisible text layer
+- `services/api` — Fastify service: Office/HTML→PDF, server compress/OCR (`pnpm dev:services`)
 - `packages/pages` — page plan/assemble (reorder, rotate, delete, insert, merge), split + ZIP, crop, header/footer/Bates, watermark, bookmarks reader
 - `packages/forms` — AcroForm reader/writer, QuickJS-sandboxed Acrobat JS (format/validate/calculate), flatten
 - `packages/annotations` — annotation model, undo/redo store, PDF reader/writer (appearance streams), interop tests
