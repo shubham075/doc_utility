@@ -78,3 +78,12 @@ async function errorText(r: Response): Promise<string> {
     return `Request failed (${r.status})`;
   }
 }
+
+/** Forward an audit event to the server's authoritative trail (best effort: the local trail is the fallback). */
+export async function postAudit(e: { action: string; doc?: { name: string; sha256: string }; details?: Record<string, string | number | boolean> }): Promise<void> {
+  try {
+    await fetch(`${BASE}/v1/audit`, { method: 'POST', headers: { ...headers(), 'content-type': 'application/json' }, body: JSON.stringify(e), signal: AbortSignal.timeout(4000) });
+  } catch {
+    /* offline */
+  }
+}

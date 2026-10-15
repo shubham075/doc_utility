@@ -20,7 +20,7 @@ export type ReviewStatus = 'none' | 'accepted' | 'rejected' | 'completed' | 'can
 export const REVIEW_STATUSES: ReviewStatus[] = ['none', 'accepted', 'rejected', 'completed', 'cancelled'];
 
 export type MarkupType = 'highlight' | 'underline' | 'strikeout' | 'squiggly';
-export type AnnotationType = MarkupType | 'note' | 'freetext' | 'ink' | 'square' | 'circle' | 'line' | 'stamp' | 'reply';
+export type AnnotationType = MarkupType | 'note' | 'freetext' | 'ink' | 'square' | 'circle' | 'line' | 'stamp' | 'redact' | 'reply';
 
 export interface BaseAnnotation {
   /** Stable id; written to the PDF as /NM. Foreign annotations without /NM get `ref:<obj>-<gen>`. */
@@ -88,6 +88,14 @@ export interface LineAnnotation extends BaseAnnotation {
   endStyle: LineEnd;
 }
 
+/** Area marked for permanent removal. Nothing is removed until the redactions are applied. */
+export interface RedactAnnotation extends BaseAnnotation {
+  type: 'redact';
+  quads: Rect[];
+  /** Colour of the box painted over the removed content (#rrggbb). */
+  overlayColor: string;
+}
+
 /** Image stamp (signature, initials, logo). PNG or JPEG as a data URL. */
 export interface StampAnnotation extends BaseAnnotation {
   type: 'stamp';
@@ -110,6 +118,7 @@ export type Annotation =
   | ShapeAnnotation
   | LineAnnotation
   | StampAnnotation
+  | RedactAnnotation
   | ReplyAnnotation;
 
 export const MARKUP_TYPES: MarkupType[] = ['highlight', 'underline', 'strikeout', 'squiggly'];
@@ -127,6 +136,7 @@ export const TYPE_LABELS: Record<AnnotationType, string> = {
   circle: 'Ellipse',
   line: 'Line',
   stamp: 'Signature / image',
+  redact: 'Redaction',
   reply: 'Reply',
 };
 

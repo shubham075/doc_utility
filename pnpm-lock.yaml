@@ -226,6 +226,9 @@ importers:
       '@pdfsuite/pages':
         specifier: workspace:*
         version: link:../../packages/pages
+      '@pdfsuite/security':
+        specifier: workspace:*
+        version: link:../../packages/security
       '@pdfsuite/viewer':
         specifier: workspace:*
         version: link:../../packages/viewer
@@ -435,6 +438,43 @@ importers:
         specifier: ^5.0.4
         version: 5.0.4(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(tsx@4.23.15))
 
+  packages/security:
+    dependencies:
+      '@pdfsuite/annotations':
+        specifier: workspace:*
+        version: link:../annotations
+      '@pdfsuite/convert':
+        specifier: workspace:*
+        version: link:../convert
+      node-forge:
+        specifier: ^1.4.0
+        version: 1.4.0
+      pdf-lib:
+        specifier: ^1.17.1
+        version: 1.17.1
+    devDependencies:
+      '@napi-rs/canvas':
+        specifier: ^1.0.11
+        version: 1.0.11
+      '@pdfsuite/engine':
+        specifier: workspace:*
+        version: link:../engine
+      '@types/node':
+        specifier: ^26.6.5
+        version: 26.6.5
+      '@types/node-forge':
+        specifier: ^1.3.14
+        version: 1.3.14
+      pdfjs-dist:
+        specifier: ^6.4.299
+        version: 6.4.299
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^5.0.4
+        version: 5.0.4(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(tsx@4.23.15))
+
   packages/viewer:
     dependencies:
       '@pdfsuite/annotations':
@@ -452,6 +492,9 @@ importers:
       '@pdfsuite/pages':
         specifier: workspace:*
         version: link:../pages
+      '@pdfsuite/security':
+        specifier: workspace:*
+        version: link:../security
       react:
         specifier: ^19.3.0
         version: 19.3.0
@@ -486,6 +529,9 @@ importers:
       '@pdfsuite/ocr':
         specifier: workspace:*
         version: link:../../packages/ocr
+      '@pdfsuite/security':
+        specifier: workspace:*
+        version: link:../../packages/security
       '@tesseract.js-data/eng':
         specifier: ^1.0.0
         version: 1.0.0
@@ -993,6 +1039,9 @@ packages:
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
 
+  '@types/node-forge@1.3.14':
+    resolution: {integrity: sha512-mhVF2BnD4BO+jtOp7z1CdzaK4mbuK0LLQYAvdOLqHTavxFNq4zA1EmYkpnFjP8HOUzedfQkRnp0E2ulSAYSzAw==}
+
   '@types/node@24.19.2':
     resolution: {integrity: sha512-93d49wCWJkCyN87MxLpNN6KXPCwFw7bVUg79mGUV1OS40JGWwVCr8n61DXCSqz7CV6/VfPkb7xec7uP2M+QHWQ==}
 
@@ -1445,6 +1494,10 @@ packages:
     peerDependenciesMeta:
       encoding:
         optional: true
+
+  node-forge@1.4.0:
+    resolution: {integrity: sha512-LarFH0+6VfriEhqMMcLX2F7SwSXeWwnEAJEsYm5QKWchiVYVvJyV9v7UDvUv+w5HO23ZpQTXDv/GxdDdMyOuoQ==}
+    engines: {node: '>= 6.13.0'}
 
   obug@3.0.0:
     resolution: {integrity: sha512-5vvB5+W7ePv+p3uqxi+RcW1XAzLW0/hxt3/4X4Lc4qHudzOhmBiBwOY6DRob4WnanAEGvNcLjF+KNOufrUoEQw==}
@@ -2103,6 +2156,10 @@ snapshots:
 
   '@types/estree@1.0.9': {}
 
+  '@types/node-forge@1.3.14':
+    dependencies:
+      '@types/node': 26.6.5
+
   '@types/node@24.19.2':
     dependencies:
       undici-types: 7.24.6
@@ -2463,6 +2520,8 @@ snapshots:
   node-fetch@2.7.0:
     dependencies:
       whatwg-url: 5.0.0
+
+  node-forge@1.4.0: {}
 
   obug@3.0.0: {}
 

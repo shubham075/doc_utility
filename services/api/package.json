@@ -17,6 +17,7 @@
     "@pdfsuite/convert": "workspace:*",
     "@pdfsuite/engine": "workspace:*",
     "@pdfsuite/ocr": "workspace:*",
+    "@pdfsuite/security": "workspace:*",
     "@tesseract.js-data/eng": "^1.0.0",
     "fastify": "^5.12.7",
     "pdf-lib": "^1.17.1",

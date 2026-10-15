@@ -105,6 +105,7 @@ export function annotationBounds(a: Annotation): Rect {
     case 'underline':
     case 'strikeout':
     case 'squiggly':
+    case 'redact':
       return unionRects(a.quads);
     case 'note':
       return { x: a.x, y: a.y, width: NOTE_SIZE, height: NOTE_SIZE };
@@ -131,7 +132,7 @@ export function annotationBounds(a: Annotation): Rect {
 }
 
 /** Whether the annotation's geometry can be dragged in the viewer (text markup is anchored to text). */
-export const isMovable = (a: Annotation) => !['highlight', 'underline', 'strikeout', 'squiggly', 'reply'].includes(a.type);
+export const isMovable = (a: Annotation) => !['highlight', 'underline', 'strikeout', 'squiggly', 'redact', 'reply'].includes(a.type);
 
 /** Move an annotation by (dx, dy) in display space. Returns a patch. */
 export function translate(a: Annotation, dx: number, dy: number): Partial<Annotation> {

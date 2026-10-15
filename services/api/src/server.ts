@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { ConversionError, OFFICE_EXTENSIONS, htmlToPdf, isPdf, officeToPdf } from './converters';
 import { JobQueue, QueueFullError, type JobResult } from './jobs';
 import { compressJob, ocrJob } from './pdfJobs';
+import { ServerAudit } from './audit';
 import { findTools, type Tools } from './tools';
 
 export interface ServerConfig {
@@ -18,6 +19,10 @@ export interface ServerConfig {
   resultTtlMs: number;
   corsOrigins: string[];
   tools: Tools;
+  /** Keys that may read and verify the audit log (separate from ordinary user keys). */
+  adminKeys?: string[];
+  /** JSON-lines file for the audit trail; in-memory only when unset. */
+  auditFile?: string;
 }
 
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -30,6 +35,8 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ServerConfi
     resultTtlMs: Number(env.RESULT_TTL_MIN ?? 15) * 60_000,
     corsOrigins: (env.CORS_ORIGINS ?? 'http://localhost:5173').split(',').map((s) => s.trim()).filter(Boolean),
     tools: findTools(env),
+    adminKeys: env.ADMIN_KEYS ? env.ADMIN_KEYS.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+    auditFile: env.AUDIT_FILE || undefined,
   };
 }
 
@@ -51,6 +58,7 @@ export function buildServer(config: ServerConfig): ApiServer {
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
   const jobs = new JobQueue({ concurrency: config.concurrency, ttlMs: config.resultTtlMs, maxPerOwner: config.maxJobsPerUser });
   app.decorate('jobs', jobs);
+  const audit = new ServerAudit(config.auditFile);
   app.addHook('onClose', async () => jobs.stop());
 
   void app.register(cors, { origin: config.corsOrigins, methods: ['GET', 'POST', 'DELETE'], allowedHeaders: ['authorization', 'content-type'], exposedHeaders: ['content-disposition'] });
@@ -63,6 +71,11 @@ export function buildServer(config: ServerConfig): ApiServer {
     const key = m?.[1];
     if (!key || !config.apiKeys.some((k) => safeEqual(k, key))) return null;
     return createHash('sha256').update(key).digest('hex').slice(0, 16);
+  };
+
+  const isAdmin = (req: FastifyRequest): boolean => {
+    const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? '');
+    return !!m?.[1] && !!config.adminKeys?.some((k) => safeEqual(k, m[1]!));
   };
 
   app.get('/health', async () => ({
@@ -121,6 +134,7 @@ export function buildServer(config: ServerConfig): ApiServer {
             return ocrJob(f.data, f.name, { pages: Array.isArray(options.pages) ? options.pages.filter((p): p is number => Number.isInteger(p)) : [], dpi: num(options.dpi, 250, 100, 400), skipPagesWithText: options.skipPagesWithText !== false }, ctx);
         }
       });
+      void audit.record({ user: owner, action: `job.${kind}`, details: { bytes: f.data.length, file: f.name } });
       return reply.code(202).send({ id: job.id, state: job.state });
     } catch (e) {
       if (e instanceof QueueFullError) return reply.code(429).send({ error: e.message });
@@ -153,6 +167,32 @@ export function buildServer(config: ServerConfig): ApiServer {
     const owner = authenticate(req);
     if (!owner) return reply.code(401).send({ error: 'Unauthorized' });
     return jobs.cancel(req.params.id, owner) ? reply.code(204).send() : reply.code(404).send({ error: 'Job not found' });
+  });
+
+  app.post<{ Body: { action?: unknown; doc?: { name?: unknown; sha256?: unknown }; details?: Record<string, unknown> } }>('/v1/audit', async (req, reply) => {
+    const owner = authenticate(req);
+    if (!owner) return reply.code(401).send({ error: 'Unauthorized' });
+    const b = req.body ?? {};
+    if (typeof b.action !== 'string' || !/^[a-z][a-z0-9.]{0,39}$/.test(b.action)) return reply.code(400).send({ error: 'Invalid action' });
+    const doc = b.doc && typeof b.doc.name === 'string' && typeof b.doc.sha256 === 'string' && /^[0-9a-f]{64}$/.test(b.doc.sha256) ? { name: cleanName(b.doc.name), sha256: b.doc.sha256 } : undefined;
+    const details: Record<string, string | number | boolean> = {};
+    for (const [k, v] of Object.entries(b.details ?? {}).slice(0, 16)) {
+      if (/^[A-Za-z0-9_.-]{1,40}$/.test(k) && (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string')) details[k] = typeof v === 'string' ? v.slice(0, 200) : v;
+    }
+    const e = await audit.record({ user: owner, action: b.action, doc, details: Object.keys(details).length ? details : undefined });
+    return reply.code(201).send({ seq: e.seq, hash: e.hash });
+  });
+
+  app.get<{ Querystring: { offset?: string; limit?: string } }>('/v1/audit', async (req, reply) => {
+    if (!isAdmin(req)) return reply.code(403).send({ error: 'Administrator key required' });
+    const offset = Math.max(0, Number(req.query.offset ?? 0) || 0);
+    const limit = Math.min(1000, Math.max(1, Number(req.query.limit ?? 200) || 200));
+    return { total: audit.size, entries: audit.list(offset, limit) };
+  });
+
+  app.get('/v1/audit/verify', async (req, reply) => {
+    if (!isAdmin(req)) return reply.code(403).send({ error: 'Administrator key required' });
+    return { entries: audit.size, ...(await audit.verify()) };
   });
 
   app.setErrorHandler((err: Error & { statusCode?: number }, _req, reply) => {

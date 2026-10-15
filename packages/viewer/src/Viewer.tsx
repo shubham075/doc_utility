@@ -23,6 +23,8 @@ import { SignatureDialog } from './SignatureDialog';
 import { PageOrganizer } from './PageOrganizer';
 import { CombineDialog, CropDialog, HeaderFooterDialog, SplitDialog, WatermarkDialog, type DialogKind, type PageTools } from './PageToolDialogs';
 import { OutlinePanel, PageToolbar } from './PageToolbar';
+import { SecurityToolbar } from './SecurityToolbar';
+import { AuditDialog, ProtectDialog, RedactDialog, SanitizeDialog, SignDialog, SignaturesDialog, type SecurityDialogKind, type SecurityTools } from './SecurityDialogs';
 import { CompressDialog, CreateDialog, ExportDialog, OcrDialog, type ConvertDialogKind, type ConvertTools } from './ConvertDialogs';
 import { loadSignature, type SavedSignature, type SignatureKind } from './signatures';
 import {
@@ -62,6 +64,8 @@ export interface PdfViewerProps {
   pages?: PageTools;
   /** Enables create/export/compress/OCR. */
   convert?: ConvertTools;
+  /** Enables protect/sanitize/redact/sign/audit, and enforces the document's permissions. */
+  security?: SecurityTools;
 }
 
 export interface FormSupport {
@@ -82,7 +86,7 @@ export interface AnnotationSupport {
 
 type SidebarTab = 'pages' | 'search' | 'comments' | 'bookmarks';
 
-export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTools, convert }: PdfViewerProps) {
+export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTools, convert, security }: PdfViewerProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [sizes, setSizes] = useState<Size[]>([]);
@@ -123,6 +127,9 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
   const [dialog, setDialog] = useState<DialogKind | null>(null);
   const bookmarkCount = pageTools?.outline.length ?? 0;
   const [convertDialog, setConvertDialog] = useState<ConvertDialogKind | null>(null);
+  const [secDialog, setSecDialog] = useState<SecurityDialogKind | null>(null);
+  const canAnnotate = !security || security.permissions.annotate || security.permissions.modify;
+  const redactMarks = useMemo(() => allAnnotations.filter((a) => a.type === 'redact'), [allAnnotations]);
 
   // ---- forms + Fill & Sign
   const formStore = forms?.store;
@@ -474,7 +481,8 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
         }
         const quads = mergeLineRects(rects);
         if (quads.length) {
-          created.push({ ...baseFields(idx, author, style.color, style.opacity), type: tool as MarkupType, quads } as Annotation);
+          const base = baseFields(idx, author, style.color, style.opacity);
+          created.push((tool === 'redact' ? { ...base, color: '#ff0000', opacity: 1, type: 'redact', quads, overlayColor: '#000000' } : { ...base, type: tool as MarkupType, quads }) as Annotation);
         }
       }
       if (!created.length) return;
@@ -613,7 +621,7 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
   }
 
   return (
-    <div className={`pv-root pv-tool-${tool}${DRAW_TOOLS.includes(tool) ? ' pv-tool-draw' : ''}`}>
+    <div className={`pv-root pv-tool-${tool}${DRAW_TOOLS.includes(tool) ? ' pv-tool-draw' : ''}${security && !security.permissions.copy ? ' pv-nocopy' : ''}`}>
       <Toolbar
         sidebar={sidebar}
         onSidebar={(t) => setSidebar((s) => (s === t ? null : t))}
@@ -661,7 +669,10 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
           </span>
         </div>
       )}
-      {ann && store && (
+      {security && (
+        <SecurityToolbar tools={security} tool={tool} onTool={setTool} markCount={redactMarks.length} onDialog={setSecDialog} canMark={!!store && canAnnotate} />
+      )}
+      {ann && store && canAnnotate && (
         <AnnotationToolbar
           tool={tool}
           onTool={setTool}
@@ -678,7 +689,7 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
           onSave={ann.onSave}
         />
       )}
-      {ann && store && (
+      {ann && store && canAnnotate && (
         <FillSignToolbar tool={tool} onTool={setTool} has={{ signature: !!savedSigs.signature, initials: !!savedSigs.initials }} armed={armedKind} onSign={onSign} onEdit={(kind) => setSigDialog({ kind })} />
       )}
       {forms && formStore && formStore.hasFields && (
@@ -705,6 +716,29 @@ export function PdfViewer({ doc, textDoc, annotations: ann, forms, pages: pageTo
           {convertDialog === 'export' && <ExportDialog tools={convert} pageCount={doc.pageCount} currentPage={current} onClose={() => setConvertDialog(null)} />}
           {convertDialog === 'compress' && <CompressDialog tools={convert} pageCount={doc.pageCount} currentPage={current} onClose={() => setConvertDialog(null)} />}
           {convertDialog === 'ocr' && <OcrDialog tools={convert} pageCount={doc.pageCount} currentPage={current} onClose={() => setConvertDialog(null)} />}
+        </>
+      )}
+      {security && secDialog && (
+        <>
+          {secDialog === 'protect' && <ProtectDialog tools={security} onClose={() => setSecDialog(null)} />}
+          {secDialog === 'sanitize' && <SanitizeDialog tools={security} onClose={() => setSecDialog(null)} />}
+          {secDialog === 'redact' && (
+            <RedactDialog
+              tools={security}
+              textSource={textCache}
+              markCount={redactMarks.length}
+              onMark={(page, rects) => store?.add({ ...baseFields(page, author, '#ff0000', 1), type: 'redact', quads: rects, overlayColor: '#000000' })}
+              collectMarks={() => {
+                const by = new Map<number, Rect[]>();
+                for (const a of redactMarks) if (a.type === 'redact') by.set(a.page, [...(by.get(a.page) ?? []), ...a.quads]);
+                return [...by].map(([page, rects]) => ({ page, rects }));
+              }}
+              onClose={() => setSecDialog(null)}
+            />
+          )}
+          {secDialog === 'sign' && <SignDialog tools={security} pageCount={doc.pageCount} currentPage={current} pageSizes={sizes} onClose={() => setSecDialog(null)} />}
+          {secDialog === 'signatures' && <SignaturesDialog tools={security} onClose={() => setSecDialog(null)} />}
+          {secDialog === 'audit' && <AuditDialog tools={security} onClose={() => setSecDialog(null)} />}
         </>
       )}
       {pageTools && dialog && (

@@ -1,5 +1,6 @@
 import type { ImageEncoder, JpegRecompressor, SourceImage } from '@pdfsuite/convert';
 import { sniffImageType } from '@pdfsuite/convert';
+import type { JpegDecoder } from '@pdfsuite/security';
 
 /** Canvas-based image helpers for browsers (the Node equivalents live in the tests/service). */
 
@@ -41,3 +42,25 @@ export async function toPdfImage(file: File): Promise<SourceImage> {
   const blob = await c.convertToBlob({ type: 'image/png' });
   return { data: new Uint8Array(await blob.arrayBuffer()), type: 'png', name: file.name };
 }
+
+/** JPEG -> RGB pixels for the redaction engine (blanking part of an image). */
+export const browserJpegDecoder: JpegDecoder = async (jpeg) => {
+  try {
+    const bmp = await createImageBitmap(new Blob([jpeg as BlobPart], { type: 'image/jpeg' }), { imageOrientation: 'none', colorSpaceConversion: 'none' });
+    const c = new OffscreenCanvas(bmp.width, bmp.height);
+    const ctx = c.getContext('2d')!;
+    ctx.drawImage(bmp, 0, 0);
+    const { width, height } = bmp;
+    bmp.close();
+    const rgba = ctx.getImageData(0, 0, width, height).data;
+    const rgb = new Uint8Array(width * height * 3);
+    for (let i = 0, j = 0; i < rgba.length; i += 4) {
+      rgb[j++] = rgba[i]!;
+      rgb[j++] = rgba[i + 1]!;
+      rgb[j++] = rgba[i + 2]!;
+    }
+    return { width, height, rgb };
+  } catch {
+    return null; // the image is then removed completely rather than partly blanked
+  }
+};

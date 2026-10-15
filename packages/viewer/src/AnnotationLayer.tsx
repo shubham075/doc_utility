@@ -129,6 +129,9 @@ export const AnnotationLayer = memo(function AnnotationLayer(p: Props) {
         if (Math.hypot(r.width, r.height) >= 3)
           a = { ...b, type: 'line', p1: d.start, p2: end, width: style.width, startStyle: 'none', endStyle: d.tool === 'arrow' ? 'arrow' : 'none' };
         break;
+      case 'redactArea':
+        if (r.width >= 3 && r.height >= 3) a = { ...b, type: 'redact', quads: [r], overlayColor: '#000000', color: '#ff0000', opacity: 1 };
+        break;
       case 'textbox': {
         const rect = r.width >= 12 && r.height >= 12 ? r : { x: d.start.x, y: d.start.y, width: 170, height: 48 };
         a = { ...b, type: 'freetext', rect, fontSize: style.fontSize, fill: null, borderWidth: 0 };
@@ -259,6 +262,8 @@ function draftToAnnotation(d: Draft, s: ToolStyle): Annotation {
       return { ...b, type: 'circle', rect: normRect(d.start, d.cur), width: s.width, fill: null };
     case 'textbox':
       return { ...b, type: 'square', rect: normRect(d.start, d.cur), width: 1, fill: null, color: '#2563eb' };
+    case 'redactArea':
+      return { ...b, type: 'redact', quads: [normRect(d.start, d.cur)], overlayColor: '#000000', color: '#ff0000' };
     default:
       return { ...b, type: 'line', p1: d.start, p2: d.cur, width: s.width, startStyle: 'none', endStyle: d.tool === 'arrow' ? 'arrow' : 'none' };
   }
@@ -411,6 +416,14 @@ function Shape({
           {a.endStyle === 'arrow' && <polygon points={arrowHead(a.p2, a.p1, a.width)} fill={a.color} fillOpacity={op} />}
           {a.startStyle === 'arrow' && <polygon points={arrowHead(a.p1, a.p2, a.width)} fill={a.color} fillOpacity={op} />}
         </g>
+      );
+    case 'redact':
+      return (
+        <>
+          {a.quads.map((q, i) => (
+            <rect key={i} x={q.x} y={q.y} width={q.width} height={q.height} fill="#ff0000" fillOpacity={0.12} stroke="#d00000" strokeWidth={1.2} strokeDasharray="4 3" />
+          ))}
+        </>
       );
     case 'stamp':
       return <image href={a.dataUrl} x={a.rect.x} y={a.rect.y} width={a.rect.width} height={a.rect.height} preserveAspectRatio="none" opacity={op} />;

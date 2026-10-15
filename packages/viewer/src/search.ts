@@ -33,11 +33,33 @@ export function buildPageText(items: TextItem[]): { text: string; starts: number
   return { text, starts };
 }
 
-/** Bounding box (page space) of characters [from, to) inside one text run, assuming even glyph advance. */
+/** Width of the first `upTo` characters of a run in some font; used to place sub-run rectangles proportionally. */
+export type PrefixMeasurer = (item: TextItem, upTo: number) => number;
+
+let measurer: PrefixMeasurer | null = null;
+export function setPrefixMeasurer(m: PrefixMeasurer | null) {
+  measurer = m;
+}
+
+/** Canvas-based measurer (browsers): glyph widths of the run's font, scaled to the run's real width. */
+export function canvasMeasurer(): PrefixMeasurer | null {
+  if (typeof OffscreenCanvas === 'undefined') return null;
+  const ctx = new OffscreenCanvas(1, 1).getContext('2d');
+  if (!ctx) return null;
+  return (item, upTo) => {
+    ctx.font = `${Math.max(1, item.fontSize)}px ${item.fontFamily || 'sans-serif'}`;
+    return ctx.measureText(item.str.slice(0, upTo)).width;
+  };
+}
+if (!measurer) measurer = canvasMeasurer();
+
+/** Bounding box (page space) of characters [from, to) inside one text run (proportional when a measurer exists, else even advance). */
 export function itemRect(item: TextItem, from: number, to: number): Rect {
   const len = item.str.length || 1;
-  const x0 = (item.width * from) / len;
-  const x1 = (item.width * to) / len;
+  const total = measurer && item.str.length > 0 ? measurer(item, item.str.length) : 0;
+  const at = (i: number) => (total > 0 ? (item.width * measurer!(item, i)) / total : (item.width * i) / len);
+  const x0 = at(from);
+  const x1 = at(to);
   const top = -item.ascent * item.fontSize;
   const bottom = top + item.fontSize;
   const cos = Math.cos(item.angle);

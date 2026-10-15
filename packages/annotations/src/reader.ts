@@ -69,6 +69,7 @@ export async function readAnnotations(bytes: Uint8Array): Promise<ReadResult> {
       const borderWidth = borderWidthOf(ctx, d);
 
       switch (e.subtype) {
+        case 'Redact':
         case 'Highlight':
         case 'Underline':
         case 'StrikeOut':
@@ -83,7 +84,11 @@ export async function readAnnotations(bytes: Uint8Array): Promise<ReadResult> {
               quads.push({ x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) });
             }
           } else if (rect) quads.push(rect);
-          const type = { Highlight: 'highlight', Underline: 'underline', StrikeOut: 'strikeout', Squiggly: 'squiggly' }[e.subtype] as 'highlight';
+          if (e.subtype === 'Redact') {
+            annotations.push({ ...base, type: 'redact', quads, overlayColor: colorArrayToHex(getNumbers(ctx, d, 'IC')) ?? '#000000' });
+            break;
+          }
+          const type = { Highlight: 'highlight', Underline: 'underline', StrikeOut: 'strikeout', Squiggly: 'squiggly' }[e.subtype as 'Highlight'] as 'highlight';
           annotations.push({ ...base, type, quads });
           break;
         }

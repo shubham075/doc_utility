@@ -25,6 +25,7 @@ export const MANAGED_SUBTYPES = new Set([
   'Square',
   'Circle',
   'Line',
+  'Redact',
 ]);
 
 export class EncryptedDocumentError extends Error {

@@ -26,8 +26,9 @@ export function AnnotationToolbar(p: Props) {
   const t = p.selected?.type;
   const showWidth = p.selected ? ['ink', 'square', 'circle', 'line'].includes(t!) : ['ink', 'rect', 'ellipse', 'line', 'arrow'].includes(p.tool);
   const showFont = p.selected ? t === 'freetext' : p.tool === 'textbox';
-  const showOpacity = p.selected ? t !== 'note' && t !== 'reply' : p.tool !== 'select' && p.tool !== 'note';
-  const showColor = p.selected ? t !== 'reply' : p.tool !== 'select';
+  const redacting = p.selected ? t === 'redact' : p.tool === 'redact' || p.tool === 'redactArea';
+  const showOpacity = !redacting && (p.selected ? t !== 'note' && t !== 'reply' : p.tool !== 'select' && p.tool !== 'note');
+  const showColor = !redacting && (p.selected ? t !== 'reply' : p.tool !== 'select');
 
   return (
     <div className="pv-toolbar pv-annbar" role="toolbar" aria-label="Annotation toolbar">

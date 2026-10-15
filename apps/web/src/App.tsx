@@ -21,11 +21,34 @@ import {
   type OutlineItem,
   type PlanItem,
 } from '@pdfsuite/pages';
-import { PdfViewer, type ConvertTools, type PageTools } from '@pdfsuite/viewer';
+import {
+  ALL_PERMISSIONS,
+  AuditLog,
+  LocalAuditStore,
+  PasswordError,
+  auditToCsv,
+  certificateFromBytes,
+  certificateToPem,
+  createSelfSignedIdentity,
+  decryptPdf,
+  encryptPdf,
+  examineDocument,
+  loadPkcs12,
+  nameOf,
+  readEncryptionInfo,
+  redactPdf,
+  sanitizePdf,
+  signPdf,
+  verifySignatures,
+  certificateFromPem,
+  type AuditAction,
+  type Permissions,
+} from '@pdfsuite/security';
+import { Modal, PdfViewer, type ConvertTools, type PageTools, type SecurityTools } from '@pdfsuite/viewer';
 import { exportImages, exportText, imagesToPdf, optimizePdf, zipFiles, type SourceImage } from '@pdfsuite/convert';
 import { createTesseractRecognizer, ocrPdf } from '@pdfsuite/ocr';
-import { browserEncoder, browserRecompressor, toPdfImage } from './browserImage';
-import { getCapabilities, runJob, type Capabilities } from './services';
+import { browserEncoder, browserJpegDecoder, browserRecompressor, toPdfImage } from './browserImage';
+import { getCapabilities, postAudit, runJob, type Capabilities } from './services';
 import { desktop } from './desktop-bridge';
 import { getEngine, type EngineId } from './engines';
 import { getScriptRunner } from './scripts';
@@ -37,6 +60,8 @@ interface Prepared {
   store: AnnotationStore | null;
   forms: FormStore | null;
   outline: OutlineItem[];
+  /** The file carries digital signatures that a rewrite would invalidate. */
+  signed: boolean;
   note?: string;
 }
 
@@ -53,6 +78,45 @@ const loadAuthor = () => {
     return 'User';
   }
 };
+
+const TRUST_KEY = 'pdfsuite.trust';
+interface Trusted {
+  name: string;
+  pem: string;
+}
+const loadTrusted = (): Trusted[] => {
+  try {
+    return JSON.parse(localStorage.getItem(TRUST_KEY) ?? '[]') as Trusted[];
+  } catch {
+    return [];
+  }
+};
+const safeStorage = {
+  getItem: (k: string) => {
+    try {
+      return localStorage.getItem(k);
+    } catch {
+      return null;
+    }
+  },
+  setItem: (k: string, v: string) => {
+    try {
+      localStorage.setItem(k, v);
+    } catch {
+      /* storage unavailable: the audit trail then lives only in the server copy */
+    }
+  },
+};
+const randomPassword = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), (b) => b.toString(16).padStart(2, '0')).join('');
+const hasSignature = (b: Uint8Array) => /\/ByteRange\s*\[/.test(new TextDecoder('latin1').decode(b));
+
+interface Protection {
+  userPassword: string;
+  ownerPassword: string;
+  permissions: Permissions;
+  /** The owner password is known: restrictions can be changed or lifted. */
+  ownerKnown: boolean;
+}
 
 export function App() {
   const [engineId, setEngineId] = useState<EngineId>('pdfium');
@@ -74,27 +138,80 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const pendingModified = useRef(false);
   const openedRef = useRef<Opened | null>(null);
+  const [protection, setProtection] = useState<Protection | null>(null);
+  const [permissions, setPermissions] = useState<Permissions>(ALL_PERMISSIONS);
+  const permissionsRef = useRef(permissions);
+  const [pwPrompt, setPwPrompt] = useState<{ data: Uint8Array; name: string; error?: string } | null>(null);
+  const [trusted, setTrusted] = useState<Trusted[]>(loadTrusted);
+  const authorRef = useRef('User');
+  const capsRef = useRef<Capabilities | null>(null);
 
-  const load = useCallback((data: Uint8Array, name: string) => {
+  const auditLog = useMemo(() => {
+    const log = new AuditLog(new LocalAuditStore(safeStorage, 'pdfsuite.audit', 2000), () => authorRef.current);
+    log.onEntry = (e) => {
+      if (capsRef.current) void postAudit({ action: e.action, doc: e.doc, details: e.details });
+    };
+    return log;
+  }, []);
+  const audit = useCallback(
+    (action: AuditAction, info?: { doc?: { name: string; bytes?: Uint8Array }; details?: Record<string, string | number | boolean> }) => {
+      void auditLog.record(action, info).catch(() => undefined);
+    },
+    [auditLog],
+  );
+
+  const loadPlain = useCallback((data: Uint8Array, name: string) => {
     setHistory({ undo: [], redo: [] });
     pendingModified.current = false;
     setBytes(data);
     setFileName(name);
   }, []);
 
+  /** Opens a file; encrypted files are decrypted in memory (asking for a password if needed). */
+  const load = useCallback(
+    async (data: Uint8Array, name: string, password = '') => {
+      let info = null;
+      try {
+        info = readEncryptionInfo(data);
+      } catch {
+        /* not parseable: let the viewer report it */
+      }
+      if (!info) {
+        setProtection(null);
+        setPermissions(ALL_PERMISSIONS);
+        setPwPrompt(null);
+        audit('document.open', { doc: { name, bytes: data } });
+        loadPlain(data, name);
+        return;
+      }
+      try {
+        const r = await decryptPdf(data, password);
+        setPwPrompt(null);
+        setProtection({ userPassword: password, ownerPassword: r.ownerAuthenticated && password ? password : randomPassword(), permissions: r.info.permissions, ownerKnown: r.ownerAuthenticated });
+        setPermissions(r.ownerAuthenticated ? ALL_PERMISSIONS : r.info.permissions);
+        audit('document.decrypt', { doc: { name, bytes: data }, details: { owner: r.ownerAuthenticated } });
+        loadPlain(r.bytes, name);
+      } catch (e) {
+        if (e instanceof PasswordError) setPwPrompt({ data, name, error: password ? 'Incorrect password.' : undefined });
+        else setStatus(`Cannot open ${name}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    [audit, loadPlain],
+  );
+
   const onFile = useCallback(
     async (file: File | undefined) => {
-      if (file) load(new Uint8Array(await file.arrayBuffer()), file.name);
+      if (file) await load(new Uint8Array(await file.arrayBuffer()), file.name);
     },
     [load],
   );
 
   const openNative = useCallback(async () => {
     const [f] = (await desktop()?.openFileDialog()) ?? [];
-    if (f) load(f.bytes, f.name);
+    if (f) await load(f.bytes, f.name);
   }, [load]);
 
-  useEffect(() => desktop()?.onFileOpened((f) => load(f.bytes, f.name)), [load]);
+  useEffect(() => desktop()?.onFileOpened((f) => void load(f.bytes, f.name)), [load]);
 
   // Optional ?pdf=<url> to auto-open a document (handy for dev/testing).
   useEffect(() => {
@@ -122,7 +239,8 @@ export function App() {
         const { annotations } = await readAnnotations(bytes);
         store = new AnnotationStore(annotations);
         const model = await readForm(bytes);
-        if (model.hasForm && model.fields.length) {
+        const p = permissionsRef.current;
+        if (model.hasForm && model.fields.length && (p.fillForms || p.modify || p.annotate)) {
           const hasScripts = model.fields.some((f) => Object.values(f.actions).some(Boolean));
           let runner = null;
           if (hasScripts) {
@@ -144,7 +262,7 @@ export function App() {
       setDirty(false);
       setModified(pendingModified.current);
       pendingModified.current = false;
-      setPrepared({ bytes, renderBytes, store, forms, outline, note });
+      setPrepared({ bytes, renderBytes, store, forms, outline, signed: hasSignature(bytes), note });
     })();
     return () => {
       cancelled = true;
@@ -213,6 +331,15 @@ export function App() {
     return () => window.removeEventListener('beforeunload', warn);
   }, [anyDirty]);
 
+  useEffect(() => {
+    permissionsRef.current = permissions;
+  }, [permissions]);
+  useEffect(() => {
+    authorRef.current = author;
+  }, [author]);
+  const signedRef = useRef(false);
+  signedRef.current = prepared?.signed ?? false;
+
   const onAuthorChange = useCallback((name: string) => {
     setAuthor(name);
     try {
@@ -226,6 +353,7 @@ export function App() {
   const build = useCallback(
     async (base: Uint8Array, flatten: boolean) => {
       let out = base;
+      if (!flatten && !formStore?.isDirty && !store?.isDirty) return base;
       if (formStore && (formStore.isDirty || flatten)) {
         const { values, display } = formStore.pendingWrite();
         out = await writeForm(out, { values, display, flatten });
@@ -236,18 +364,25 @@ export function App() {
     [store, formStore],
   );
 
-  const deliver = useCallback(async (out: Uint8Array, name: string) => {
-    const d = desktop();
-    return d ? (await d.saveFile(name, out)) !== null : saveInBrowser(out, name);
-  }, []);
+  const deliver = useCallback(
+    async (out: Uint8Array, name: string) => {
+      let data = out;
+      if (protection && /\.pdf$/i.test(name)) data = await encryptPdf(out, { userPassword: protection.userPassword, ownerPassword: protection.ownerPassword, permissions: protection.permissions });
+      const d = desktop();
+      return d ? (await d.saveFile(name, data)) !== null : saveInBrowser(data, name);
+    },
+    [protection],
+  );
 
   const save = useCallback(async () => {
     if (!baseRef.current || saving) return;
+    if (signedRef.current && (dirty || formDirty) && !window.confirm('This document is signed. Saving your edits invalidates its signatures. Continue?')) return;
     setSaving(true);
     try {
       const out = await build(baseRef.current, false);
       const suggested = fileName.replace(/\.pdf$/i, '') + '.pdf';
       if (await deliver(out, suggested)) {
+        audit('document.save', { doc: { name: suggested, bytes: out }, details: { encrypted: !!protection } });
         baseRef.current = out;
         store?.markSaved();
         formStore?.markSaved();
@@ -259,7 +394,7 @@ export function App() {
     } finally {
       setSaving(false);
     }
-  }, [build, deliver, fileName, saving, store, formStore]);
+  }, [audit, build, deliver, dirty, formDirty, fileName, protection, saving, store, formStore]);
 
   /** Save a flattened copy; the open document stays fillable. */
   const flatten = useCallback(async () => {
@@ -297,8 +432,9 @@ export function App() {
 
   /** Flush pending form/annotation edits into the bytes, run `fn`, and reload the result as the new document. */
   const runEdit = useCallback(
-    async (fn: (bytes: Uint8Array) => Promise<Uint8Array>) => {
+    async (fn: (bytes: Uint8Array) => Promise<Uint8Array>, opts: { keepSignatures?: boolean } = {}) => {
       if (!baseRef.current) return;
+      if (signedRef.current && !opts.keepSignatures && !window.confirm('This document is signed. This change invalidates its signatures. Continue?')) return;
       setPageBusy(true);
       try {
         const flushed = await build(baseRef.current, false);
@@ -409,7 +545,10 @@ export function App() {
   // ---------------------------------------------------------------- convert / compress / OCR
   const [caps, setCaps] = useState<Capabilities | null>(null);
   useEffect(() => {
-    void getCapabilities().then(setCaps);
+    void getCapabilities().then((c) => {
+      capsRef.current = c;
+      setCaps(c);
+    });
   }, []);
 
   /** Open the current document (with pending edits applied) in a throw-away engine instance. */
@@ -486,10 +625,12 @@ export function App() {
       onExport: async (kind, pages, opts, progress) => {
         await withFlushedDoc(async (doc) => {
           if (kind === 'text') {
+            audit('document.export', { doc: { name: fileName }, details: { kind, pages: pages.length } });
             const text = await exportText(doc, pages, (d, t) => progress(d / t));
             await deliver(new TextEncoder().encode(text), `${baseName}.txt`);
             return;
           }
+          audit('document.export', { doc: { name: fileName }, details: { kind, pages: pages.length } });
           const files = await exportImages(doc, pages, { ...opts, baseName }, browserEncoder, (d, t) => progress(d / t, `Page ${d} of ${t}`));
           if (files.length === 1) await deliver(files[0]!.data, files[0]!.name);
           else await deliver(zipFiles(files), `${baseName}-images.zip`);
@@ -556,7 +697,97 @@ export function App() {
         return outcome;
       },
     };
-  }, [caps, anyDirty, baseName, build, deliver, fileName, load, runEdit, withFlushedDoc]);
+  }, [audit, caps, anyDirty, baseName, build, deliver, fileName, load, runEdit, withFlushedDoc]);
+
+  // ---------------------------------------------------------------- security
+  const flushed = useCallback(async () => {
+    if (!baseRef.current) throw new Error('No document is open');
+    return build(baseRef.current, false);
+  }, [build]);
+
+  const securityTools = useMemo<SecurityTools | undefined>(() => {
+    if (!prepared) return undefined;
+    const n = (v: number) => v;
+    return {
+      busy: pageBusy || saving,
+      permissions,
+      protection: protection ? { hasUserPassword: !!protection.userPassword, ownerKnown: protection.ownerKnown } : null,
+      signed: prepared.signed,
+      trusted: trusted.map((t) => t.name),
+
+      onProtect: async (r) => {
+        if (protection && !protection.ownerKnown) throw new Error('This document was opened with the open password only. Reopen it with its permissions password to change the protection.');
+        if (signedRef.current && !window.confirm('This document is signed. Protecting it invalidates the signatures. Continue?')) throw new Error('Cancelled');
+        setProtection({ userPassword: r.userPassword, ownerPassword: r.ownerPassword, permissions: r.permissions, ownerKnown: true });
+        setModified(true);
+        audit('document.encrypt', { doc: { name: fileName }, details: { openPassword: !!r.userPassword } });
+        setNotice('Password protection (AES-256) will be applied when you save.');
+      },
+      onRemoveProtection: async () => {
+        if (!protection?.ownerKnown) throw new Error('Only the permissions password can remove the protection.');
+        setProtection(null);
+        setModified(true);
+        audit('document.decrypt', { doc: { name: fileName }, details: { removedProtection: true } });
+        setNotice('Protection will be removed when you save.');
+      },
+
+      examine: async () => examineDocument(await flushed()),
+      onSanitize: async (opts) => {
+        let removed = {} as Awaited<ReturnType<typeof sanitizePdf>>['removed'];
+        await runEdit(async (b) => {
+          const r = await sanitizePdf(b, opts);
+          removed = r.removed;
+          return r.bytes;
+        });
+        const total = Object.values(removed).reduce<number>((a, v) => a + n(v ?? 0), 0);
+        audit('document.sanitize', { doc: { name: fileName }, details: { removed: total } });
+        setNotice(total ? `Sanitized: removed ${total} item(s). Save to keep the result.` : 'Nothing to remove.');
+        return removed;
+      },
+
+      onApplyRedactions: async (marks) => {
+        let report!: Awaited<ReturnType<typeof redactPdf>>['report'];
+        await runEdit(async (b) => {
+          const r = await redactPdf(b, marks, { decodeJpeg: browserJpegDecoder });
+          report = r.report;
+          return r.bytes;
+        });
+        audit('document.redact', { doc: { name: fileName }, details: { pages: report.pages, glyphs: report.glyphsRemoved, images: report.imagesRedacted + report.imagesRemoved + report.inlineImagesRemoved, shapes: report.pathsRemoved } });
+        setNotice(`Redaction applied: ${report.glyphsRemoved} characters, ${report.imagesRedacted + report.imagesRemoved + report.inlineImagesRemoved} images and ${report.pathsRemoved} shapes permanently removed. Save to keep the result.`);
+        return report;
+      },
+
+      onSign: async (r) => {
+        if (protection) throw new Error('Remove the password protection before signing (signing and encrypting cannot be combined here).');
+        const identity = r.identity.kind === 'pfx' ? loadPkcs12(new Uint8Array(await r.identity.file.arrayBuffer()), r.identity.password) : createSelfSignedIdentity({ commonName: r.identity.commonName });
+        await runEdit((b) => signPdf(b, { identity, reason: r.reason || undefined, location: r.location || undefined, visible: r.visible }), { keepSignatures: true });
+        const signer = nameOf(identity.certificate.subject.attributes);
+        audit('document.sign', { doc: { name: fileName }, details: { signer, visible: !!r.visible } });
+        setNotice(`Signed as ${signer}. Save to keep the signed copy; any later change invalidates the signature.`);
+      },
+      verify: async () => {
+        if (!baseRef.current) return [];
+        return verifySignatures(baseRef.current, { trustedRoots: trusted.map((t) => certificateFromPem(t.pem)) });
+      },
+      onAddTrust: async (file) => {
+        const cert = certificateFromBytes(new Uint8Array(await file.arrayBuffer()));
+        const next = [...trusted, { name: nameOf(cert.subject.attributes), pem: certificateToPem(cert) }];
+        setTrusted(next);
+        safeStorage.setItem(TRUST_KEY, JSON.stringify(next));
+      },
+      onRemoveTrust: (i) => {
+        const next = trusted.filter((_, k) => k !== i);
+        setTrusted(next);
+        safeStorage.setItem(TRUST_KEY, JSON.stringify(next));
+      },
+
+      auditEntries: () => auditLog.entries(),
+      auditVerify: () => auditLog.verify(),
+      onAuditExport: async () => {
+        await deliver(new TextEncoder().encode(auditToCsv(await auditLog.entries())), 'pdfsuite-audit-log.csv');
+      },
+    };
+  }, [prepared, pageBusy, saving, permissions, protection, trusted, fileName, audit, auditLog, deliver, flushed, runEdit]);
 
   const annotations = useMemo(
     () => (store ? { store, author, onAuthorChange, onSave: save, saving, extraDirty: formDirty } : undefined),
@@ -577,17 +808,27 @@ export function App() {
           <option value="pdfjs">PDF.js</option>
         </select>
         <span style={{ marginLeft: 'auto', color: '#555', fontSize: 12 }}>
+          {protection ? '🔒 ' : ''}
           {fileName}
           {anyDirty ? ' •' : ''}
         </span>
       </header>
       <main style={{ flex: 1, minHeight: 0 }}>
         {opened ? (
-          <PdfViewer doc={opened.render} textDoc={opened.text} annotations={annotations} forms={formSupport} pages={pageTools} convert={convertTools} />
+          <PdfViewer
+            doc={opened.render}
+            textDoc={opened.text}
+            annotations={annotations}
+            forms={formSupport}
+            pages={permissions.assemble || permissions.modify ? pageTools : undefined}
+            convert={permissions.copy ? convertTools : undefined}
+            security={securityTools}
+          />
         ) : (
           <p style={{ padding: 16, color: '#555' }}>{status}</p>
         )}
       </main>
+      {pwPrompt && <PasswordPrompt name={pwPrompt.name} error={pwPrompt.error} onSubmit={(pw) => void load(pwPrompt.data, pwPrompt.name, pw)} onCancel={() => setPwPrompt(null)} />}
       {notice && (
         <div role="status" style={{ padding: '4px 8px', background: '#e8f5e9', color: '#1b5e20', fontSize: 12, display: 'flex', gap: 8 }}>
           <span>{notice}</span>
@@ -599,10 +840,37 @@ export function App() {
   );
 }
 
+function PasswordPrompt({ name, error, onSubmit, onCancel }: { name: string; error?: string; onSubmit(pw: string): void; onCancel(): void }) {
+  const [pw, setPw] = useState('');
+  return (
+    <Modal title="Password required" onClose={onCancel}>
+      <p>{name} is password protected.</p>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSubmit(pw);
+        }}
+      >
+        <input className="pv-search-input" type="password" autoFocus autoComplete="off" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Password" aria-label="Document password" />
+        {error && <div className="pv-error">{error}</div>}
+        <div className="pv-search-row">
+          <span className="pv-spacer" />
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="submit" className="pv-primary">
+            Open
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 /** File System Access API when available, otherwise a download. Returns false if the user cancelled. */
 async function saveInBrowser(bytes: Uint8Array, name: string): Promise<boolean> {
   const ext = (/\.([a-z0-9]+)$/i.exec(name)?.[1] ?? 'pdf').toLowerCase();
-  const mime = ({ zip: 'application/zip', txt: 'text/plain', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', json: 'application/json' } as Record<string, string>)[ext] ?? 'application/pdf';
+  const mime = ({ zip: 'application/zip', txt: 'text/plain', csv: 'text/csv', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', json: 'application/json' } as Record<string, string>)[ext] ?? 'application/pdf';
   const w = window as unknown as {
     showSaveFilePicker?: (o: unknown) => Promise<{ createWritable(): Promise<{ write(b: BlobPart): Promise<void>; close(): Promise<void> }> }>;
   };

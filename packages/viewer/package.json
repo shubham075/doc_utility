@@ -19,7 +19,8 @@
     "@pdfsuite/engine": "workspace:*",
     "@pdfsuite/forms": "workspace:*",
     "@pdfsuite/pages": "workspace:*",
-    "react": "^19.3.0"
+    "react": "^19.3.0",
+    "@pdfsuite/security": "workspace:*"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

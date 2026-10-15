@@ -25,6 +25,8 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - name: Block AGPL/GPL dependencies
+        # Dual-licensed packages with a permissive option (node-forge: "(BSD-3-Clause OR GPL-2.0)") are fine: their
+        # key starts with the permissive licence, so only packages that are *only* (A)GPL are caught.
         run: |
           pnpm licenses list --json > licenses.json
           if grep -Ei '"(AGPL|GPL)-[0-9]' licenses.json; then echo "Copyleft license found"; exit 1; fi

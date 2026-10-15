@@ -95,6 +95,16 @@ export function buildAppearance(a: Annotation, g: PageGeometry, font?: PDFFont):
         .join('\n');
       return { rect, content: `${colorOp(a.color, true)}\n0.8 w\n1 j 1 J\n${body}`, blendMultiply: false, opacity: a.opacity };
     }
+    case 'redact': {
+      const rect = pad(rectToUser(g, unionRects(a.quads)), 1);
+      const body = a.quads
+        .map((q) => {
+          const pts = poly([{ x: q.x, y: q.y }, { x: q.x + q.width, y: q.y }, { x: q.x + q.width, y: q.y + q.height }, { x: q.x, y: q.y + q.height }], true);
+          return pts + '\nS';
+        })
+        .join('\n');
+      return { rect, content: `1 0 0 RG 1.2 w [3 2] 0 d\n${body}`, blendMultiply: false, opacity: 1 };
+    }
     case 'note': {
       const r: Rect = { x: a.x, y: a.y, width: NOTE_SIZE, height: NOTE_SIZE };
       const rect = rectToUser(g, r);

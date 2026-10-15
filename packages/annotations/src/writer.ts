@@ -26,6 +26,7 @@ const SUBTYPE: Record<string, string> = {
   freetext: 'FreeText',
   ink: 'Ink',
   stamp: 'Stamp',
+  redact: 'Redact',
   square: 'Square',
   circle: 'Circle',
   line: 'Line',
@@ -208,6 +209,24 @@ function addTypeSpecific(ctx: PDFContext, d: PDFDict, a: Annotation, g: PageGeom
         }
       }
       set('QuadPoints', ctx.obj(q));
+      break;
+    }
+    case 'redact': {
+      const q: number[] = [];
+      for (const r of a.quads) {
+        for (const [x, y] of [
+          [r.x, r.y],
+          [r.x + r.width, r.y],
+          [r.x, r.y + r.height],
+          [r.x + r.width, r.y + r.height],
+        ] as const) {
+          const u = toUser(g, { x, y });
+          q.push(u.x, u.y);
+        }
+      }
+      set('QuadPoints', ctx.obj(q));
+      set('IC', rgb(a.overlayColor));
+      set('C', rgb('#ff0000'));
       break;
     }
     case 'note':

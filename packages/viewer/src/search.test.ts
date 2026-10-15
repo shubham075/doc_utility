@@ -67,3 +67,17 @@ describe('search', () => {
     expect(calls).toBe(1);
   });
 });
+
+import { setPrefixMeasurer, itemRect as rectOf } from './search';
+describe('proportional placement', () => {
+  it('uses measured glyph widths when a measurer is installed', () => {
+    const item = { str: 'iiWW', x: 0, y: 10, width: 40, fontSize: 10, ascent: 0.8, angle: 0, fontFamily: 'x', hasEOL: false } as unknown as Parameters<typeof rectOf>[0];
+    const even = rectOf(item, 2, 4);
+    expect(even.x).toBeCloseTo(20);
+    setPrefixMeasurer((it, n) => [...it.str.slice(0, n)].reduce((w, c) => w + (c === 'i' ? 2 : 8), 0));
+    const prop = rectOf(item, 2, 4);
+    expect(prop.x).toBeCloseTo(40 * (4 / 20)); // 'ii' = 4 of 20 units
+    expect(prop.width).toBeCloseTo(40 * (16 / 20));
+    setPrefixMeasurer(null);
+  });
+});

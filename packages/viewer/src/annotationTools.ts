@@ -17,7 +17,10 @@ export type Tool =
   | 'cross'
   | 'dot'
   | 'hline'
-  | 'stamp';
+  | 'stamp'
+  // Redaction
+  | 'redact'
+  | 'redactArea';
 
 export interface ToolStyle {
   color: string;
@@ -28,11 +31,11 @@ export interface ToolStyle {
   fontSize: number;
 }
 
-export const MARKUP_TOOLS: Tool[] = ['highlight', 'underline', 'strikeout', 'squiggly'];
+export const MARKUP_TOOLS: Tool[] = ['highlight', 'underline', 'strikeout', 'squiggly', 'redact'];
 /** Tools that capture pointer drags/clicks on the page itself. */
-export const DRAW_TOOLS: Tool[] = ['note', 'textbox', 'ink', 'rect', 'ellipse', 'line', 'arrow', 'date', 'check', 'cross', 'dot', 'hline', 'stamp'];
+export const DRAW_TOOLS: Tool[] = ['note', 'textbox', 'ink', 'rect', 'ellipse', 'line', 'arrow', 'date', 'check', 'cross', 'dot', 'hline', 'stamp', 'redactArea'];
 /** Tools that stay active after one use. */
-export const STICKY_TOOLS: Tool[] = [...MARKUP_TOOLS, 'ink', 'rect', 'ellipse', 'line', 'arrow', 'check', 'cross', 'dot', 'hline'];
+export const STICKY_TOOLS: Tool[] = [...MARKUP_TOOLS, 'ink', 'rect', 'ellipse', 'line', 'arrow', 'check', 'cross', 'dot', 'hline', 'redactArea'];
 
 export const TOOL_LABELS: Record<Tool, string> = {
   select: 'Select',
@@ -53,6 +56,8 @@ export const TOOL_LABELS: Record<Tool, string> = {
   dot: '●',
   hline: '—',
   stamp: 'Place',
+  redact: 'Redact text',
+  redactArea: 'Redact area',
 };
 
 export const TOOL_TITLES: Record<Tool, string> = {
@@ -74,6 +79,8 @@ export const TOOL_TITLES: Record<Tool, string> = {
   dot: 'Dot — click to place',
   hline: 'Horizontal line — click to place',
   stamp: 'Place the signature — click on the page',
+  redact: 'Mark selected text for redaction',
+  redactArea: 'Mark an area for redaction — drag on the page',
 };
 
 export const PALETTE = ['#ffeb3b', '#ff9800', '#f44336', '#e91e63', '#4caf50', '#2196f3', '#9c27b0', '#111111'];
@@ -99,6 +106,8 @@ export const TOOL_DEFAULTS: Record<Tool, ToolStyle> = {
   dot: { ...base, color: '#111111' },
   hline: { ...base, color: '#111111', width: 1.2 },
   stamp: base,
+  redact: { ...base, color: '#ff0000' },
+  redactArea: { ...base, color: '#ff0000' },
 };
 
 /** An image waiting to be placed on a page (signature, initials). */

@@ -20,6 +20,7 @@
     "@pdfsuite/forms": "workspace:*",
     "@pdfsuite/ocr": "workspace:*",
     "@pdfsuite/pages": "workspace:*",
+    "@pdfsuite/security": "workspace:*",
     "@pdfsuite/viewer": "workspace:*",
     "pdfjs-dist": "^6.4.299",
     "react": "^19.3.0",
